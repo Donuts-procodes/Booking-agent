@@ -1,0 +1,15 @@
+$kind: http-request
+name: Staff Decision (Accept / Reject)
+url: "{{baseUrl}}/api/v1/staff/bookings/{{bookingId}}/decision"
+method: PATCH
+headers:
+  Content-Type: application/json
+  Authorization: Bearer {{staffToken}}
+body:
+  type: text
+  content: |-
+    {
+      "action": "accept",
+      "reason": "Available for customer appointment"
+    }
+order: 3000

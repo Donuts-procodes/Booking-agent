@@ -1,0 +1,16 @@
+$kind: http-request
+url: "{{baseUrl}}/api/v1/user/feedback"
+method: POST
+headers:
+  Content-Type: application/json
+body:
+  type: text
+  content: |-
+    {
+      "merchant_id": "00000000-0000-0000-0000-000000000001",
+      "booking_id": "{{bookingId}}",
+      "rating": 5,
+      "comment": "Seamless booking and dispatch experience!",
+      "flow_type": "booking"
+    }
+order: 6000

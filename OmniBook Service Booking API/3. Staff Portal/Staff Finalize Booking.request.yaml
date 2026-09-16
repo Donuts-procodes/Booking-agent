@@ -1,0 +1,15 @@
+$kind: http-request
+url: "{{baseUrl}}/api/v1/staff/bookings/{{bookingId}}/finalize"
+method: PATCH
+headers:
+  Content-Type: application/json
+  Authorization: Bearer {{staffToken}}
+body:
+  type: text
+  content: |-
+    {
+      "scheduled_date": "2026-09-20 14:00:00",
+      "payment_status": "paid",
+      "notes": "Appointment finalized with customer via phone"
+    }
+order: 4000

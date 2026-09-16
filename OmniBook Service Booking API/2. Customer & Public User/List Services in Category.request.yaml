@@ -1,0 +1,12 @@
+$kind: http-request
+url: "{{baseUrl}}/api/v1/user/catalog/{{categoryId}}/services"
+method: GET
+scripts:
+  - type: afterResponse
+    code: |-
+      var jsonData = pm.response.json();
+      if (Array.isArray(jsonData) && jsonData.length > 0) {
+          pm.collectionVariables.set('serviceId', jsonData[0].id);
+      }
+    language: text/javascript
+order: 2000

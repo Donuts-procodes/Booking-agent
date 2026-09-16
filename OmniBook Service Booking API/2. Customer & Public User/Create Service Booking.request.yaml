@@ -1,0 +1,26 @@
+$kind: http-request
+url: "{{baseUrl}}/api/v1/user/bookings"
+method: POST
+headers:
+  Content-Type: application/json
+body:
+  type: text
+  content: |-
+    {
+      "merchant_id": "00000000-0000-0000-0000-000000000001",
+      "service_id": "22222222-2222-2222-2222-222222222222",
+      "customer_name": "John Doe",
+      "customer_phone": "+1234567890",
+      "customer_email": "john.doe@example.com",
+      "note": "First appointment of the week",
+      "channel": "web"
+    }
+scripts:
+  - type: afterResponse
+    code: |-
+      var jsonData = pm.response.json();
+      if (jsonData.booking_id) {
+          pm.collectionVariables.set('bookingId', jsonData.booking_id);
+      }
+    language: text/javascript
+order: 3000

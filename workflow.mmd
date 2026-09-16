@@ -1,0 +1,153 @@
+flowchart LR
+    %% =========================================================================
+    %% SUBGRAPH 1: INGESTION, PROVISIONING & CONFIG WORKFLOW
+    %% =========================================================================
+    subgraph Subgraph_Ingestion ["1. Merchant Configuration & Ingestion"]
+        direction LR
+        ING_START["Admin Operations (Open Dev Access)"] --> ING_SPLIT{"Operation / Upload Type?"}
+
+        %% Staff Specialist Provisioning
+        ING_SPLIT -- "Staff Provisioning" --> API_STAFF_PROV["POST /api/v1/admin/staff"]
+        API_STAFF_PROV --> CHK_EMAIL{"Email Exists in PostgreSQL?"}
+        CHK_EMAIL -- "Yes (Duplicate)" --> ERR_409["Return 409 Conflict: Account Already Exists"]
+        CHK_EMAIL -- "No (Unique)" --> BCRYPT_HASH["Hash Password with Bcrypt (72-byte safe)"]
+        BCRYPT_HASH --> PG_STAFF_INS[("PostgreSQL: INSERT INTO staff (is_active=True)")]
+        PG_STAFF_INS --> STAFF_PROV_DONE["Staff Member Ready for Dispatch Queue"]
+
+        %% Agent BYOK Configuration
+        ING_SPLIT -- "LLM Config & API Key" --> API_CONF_UPDATE["PATCH /api/v1/admin/config/{id}"]
+        API_CONF_UPDATE --> AES_GCM_ENC["AES-256-GCM Encrypt API Key"]
+        AES_GCM_ENC --> PG_CONF_INS[("PostgreSQL: Store Encrypted BYOK Settings")]
+
+        %% Unstructured Knowledge Docs
+        ING_SPLIT -- "Knowledge Docs (PDF/Docx)" --> API_DOC["POST /api/v1/admin/knowledge-docs"]
+        API_DOC --> DOC_S3["Store Raw Doc in S3 / MinIO"]
+        DOC_S3 --> CHUNK["Chunking (512 tokens / 10% overlap)"]
+        CHUNK --> EMBED_DOC["Generate Dense Vector (1536-dim)"]
+        EMBED_DOC --> MILVUS_DOC[("Milvus: merchant_knowledge_idx")]
+
+        %% Tabular Catalog & Images
+        ING_SPLIT -- "Catalog (.xlsx/.csv) + Images (.zip)" --> API_CAT["POST /api/v1/admin/catalog/upload"]
+        API_CAT --> VAL_MEDIA{"Validate Columns & Media Files"}
+        VAL_MEDIA -- "Missing Media / Schema Invalid" --> ERR_ING["Return 422 Validation Error"]
+        VAL_MEDIA -- "Passed" --> UNPACK_S3["Upload Images to S3: merchants/{id}/services/{uuid}.webp"]
+
+        UNPACK_S3 --> PG_ING_TX["PostgreSQL: BEGIN TX"]
+        PG_ING_TX --> PG_CAT_INS["Upsert Categories"]
+        PG_CAT_INS --> PG_SRV_INS["Upsert Services with S3 Media URIs & Staff IDs"]
+        PG_SRV_INS --> PG_ING_COMMIT["PostgreSQL: COMMIT TX"]
+
+        PG_ING_COMMIT --> EMBED_SRV["Embed: '{service_name}: {service_description}'"]
+        EMBED_SRV --> MILVUS_CAT[("Milvus: catalog_semantic_idx")]
+    end
+
+    %% =========================================================================
+    %% SUBGRAPH 2: RUNTIME CHAT AGENT CONVERSATION FLOW
+    %% =========================================================================
+    subgraph Subgraph_Booking ["2. Customer Conversational Booking Flow"]
+        direction LR
+        B_START["Customer Greeting / Intent"] --> API_CHK_CAT["GET /api/v1/categories?status=active"]
+        API_CHK_CAT --> DB_CAT_EVAL[("Query PostgreSQL: Active Categories")]
+        DB_CAT_EVAL --> HAS_ACTIVE{"Categories Configured?"}
+
+        %% Empty Catalog Guard
+        HAS_ACTIVE -- "No (Empty Array)" --> B_UNAVAIL["Display: 'Bookings are currently unavailable'"]
+        B_UNAVAIL --> B_HALT(["Session Terminated"])
+
+        %% Discovery & Semantic Matching
+        HAS_ACTIVE -- "Yes" --> B_MATCH_TYPE{"User Request Type?"}
+        B_MATCH_TYPE -- "Browse Categories" --> B_CAT_LIST["Render Active Category Cards"]
+        B_CAT_LIST --> B_SEL_CAT["User Selects Category ID"]
+        B_SEL_CAT --> API_GET_SRVS["GET /api/v1/categories/{id}/services"]
+        API_GET_SRVS --> B_SHOW_CARD["Render Service Card (Name, S3 Image, Description, Price)"]
+
+        B_MATCH_TYPE -- "Natural Language Description" --> MILVUS_SRCH["Vector Query: catalog_semantic_idx"]
+        MILVUS_SRCH --> VEC_DIST{"Top Match Distance Delta < Threshold?"}
+        VEC_DIST -- "Yes (Ambiguous Match)" --> B_CLARIFY["Agent Asks Single Clarifying Question"]
+        B_CLARIFY --> B_SHOW_CARD
+        VEC_DIST -- "No (Exact/Distinct Match)" --> B_SHOW_CARD
+
+        %% Extraction, Read-Back & Commit
+        B_SHOW_CARD --> B_SLOT["Extract Slots: Full Name, Phone, Optional Free-Text Note"]
+        B_SLOT --> B_READBACK["Agent Explicit Read-Back: Name, Phone, Service & Notes"]
+        B_READBACK --> B_CONF{"User Explicitly Confirms?"}
+
+        B_CONF -- "No (Amend Info)" --> B_SLOT
+        B_CONF -- "Yes" --> API_BOOK_POST["POST /api/v1/bookings"]
+
+        API_BOOK_POST --> ROUTER_RR["Routing Engine: Round-Robin Active Staff for Service"]
+        ROUTER_RR --> PG_BOOK_INS["PostgreSQL: INSERT bookings (status='pending', unique_booking_id)"]
+        PG_BOOK_INS --> STAFF_BUS["Push Notification to Assigned Staff Queue"]
+        STAFF_BUS --> B_DISP_ID["Agent Displays Booking ID & Advises Staff Will Contact"]
+        B_DISP_ID --> API_FEED_1["POST /api/v1/feedback"]
+        API_FEED_1 --> B_FIN(["Booking Workflow Complete"])
+    end
+
+    %% =========================================================================
+    %% SUBGRAPH 3: STAFF PANEL OPERATIONS & LIFECYCLE
+    %% =========================================================================
+    subgraph Subgraph_Staff ["3. Staff Operations & Lifecycle Flow"]
+        direction LR
+        S_AUTH["POST /api/v1/auth/staff/login"] --> S_QUEUE["GET /api/v1/staff/bookings?status=pending"]
+        S_QUEUE --> S_REVIEW["Staff Reviews Incoming Contact Details & Notes"]
+        S_REVIEW --> S_DECIDE{"Staff Decision: Accept or Reject?"}
+
+        %% Staff Reject & Cascade Branch
+        S_DECIDE -- "Reject" --> API_REJ["PATCH /api/v1/staff/bookings/{id}/decision (reject)"]
+        API_REJ --> S_CASCADE_CHK{"Alternate Staff Assigned to Service?"}
+        S_CASCADE_CHK -- "Yes (Re-route)" --> S_REASSIGN["Reassign to Next Active Staff in Round-Robin"]
+        S_REASSIGN --> S_QUEUE
+        S_CASCADE_CHK -- "No (Pool Exhausted)" --> S_SET_REJ["Update Status: 'rejected'"]
+        S_SET_REJ --> S_NOTIF_CUST["Dispatch Rejection Notification to Customer"]
+        S_NOTIF_CUST --> S_REJ_END(["Booking Terminated"])
+
+        %% Staff Accept & Finalize Branch
+        S_DECIDE -- "Accept" --> API_ACC["PATCH /api/v1/staff/bookings/{id}/decision (accept)"]
+        API_ACC --> S_OFFLINE["Staff Contacts Customer Offline (Call/WhatsApp/Email)"]
+        S_OFFLINE --> S_FORMALITIES["Finalize Formalities: Date/Time Slot, Payment, Retainer, Documents"]
+        S_FORMALITIES --> API_FIN["PATCH /api/v1/staff/bookings/{id}/finalize"]
+        API_FIN --> PG_FIN_TX["PostgreSQL: UPDATE status='finalized', payment_status='paid'"]
+        PG_FIN_TX --> S_FIN_END(["Booking Finalized & Locked"])
+    end
+
+    %% =========================================================================
+    %% SUBGRAPH 4: STATUS INQUIRY & CANCELLATION FLOWS
+    %% =========================================================================
+    subgraph Subgraph_Status_Cancel ["4. Status Inquiry & Verified Cancellation"]
+        direction LR
+        %% Status Inquiry Branch
+        INQ_REQ["User Status Inquiry (Provides Booking ID)"] --> INQ_CHALLENGE["Prompt for Registered Phone Number"]
+        INQ_CHALLENGE --> API_STAT_CHK["POST /api/v1/bookings/status-check"]
+        API_STAT_CHK --> DB_STAT_EVAL[("Query PostgreSQL: ID & Phone Match")]
+        DB_STAT_EVAL --> INQ_MATCH{"Verified?"}
+        INQ_MATCH -- "No" --> INQ_ERR["Return 404: Generic Not Found (Protect Privacy)"]
+        INQ_MATCH -- "Yes" --> INQ_FETCH["Retrieve Exact Real-Time Database Status"]
+        INQ_FETCH --> INQ_DISP["Agent Displays Un-Fabricated Current Status"]
+        INQ_DISP --> API_FEED_2["POST /api/v1/feedback"]
+
+        %% Cancellation Branch
+        CAN_REQ["User Cancellation Request (Provides Booking ID)"] --> API_VER_POST["POST /api/v1/bookings/verify"]
+        API_VER_POST --> DB_VER_QUERY[("Verify Record Ownership & Current Status")]
+        DB_VER_QUERY --> CAN_OWN{"Ownership Valid?"}
+
+        CAN_OWN -- "No" --> CAN_REJ_UNAUTH["Decline Request Without Exposing Metadata"]
+        CAN_OWN -- "Yes" --> CAN_STATE{"Current Booking Status?"}
+
+        CAN_STATE -- "Status: cancelled" --> CAN_ALREADY["Inform: 'This reservation is already cancelled'"]
+        CAN_STATE -- "Status: finalized" --> CAN_LOCKED["Inform: 'Booking is locked/paid. Please contact staff directly'"]
+        CAN_STATE -- "Status: pending | accepted" --> CAN_TOKEN["Issue Short-Lived JWT Verification Token"]
+
+        CAN_TOKEN --> CAN_CONF_PROMPT["Agent Reads Back Service Details & Asks Confirmation"]
+        CAN_CONF_PROMPT --> CAN_EXPLICIT{"User Explicitly Confirms?"}
+        CAN_EXPLICIT -- "No" --> CAN_ABORT["Inform: 'Cancellation aborted. Booking remains active'"]
+        CAN_EXPLICIT -- "Yes" --> API_CAN_EXEC["POST /api/v1/bookings/{id}/cancel (Bearer Token)"]
+        API_CAN_EXEC --> PG_CAN_TX["PostgreSQL: UPDATE status='cancelled', cancelled_at=NOW()"]
+        PG_CAN_TX --> CAN_STAFF_ALERT["Push Real-Time Alert to Assigned Staff Panel"]
+        CAN_STAFF_ALERT --> API_FEED_3["POST /api/v1/feedback"]
+        API_FEED_3 --> CAN_FIN(["Cancellation Workflow Complete"])
+    end
+
+    %% Subgraph Connections
+    PG_ING_COMMIT -. "Data Ready" .-> DB_CAT_EVAL
+    STAFF_BUS -. "Pushes To" .-> S_QUEUE
+    PG_FIN_TX -. "Updates State" .-> DB_STAT_EVAL

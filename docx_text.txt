@@ -1,0 +1,997 @@
+Universal Service Booking Assistant Platform Technical Specification
+1. System Overview & Core Capabilities
+The Universal Service Booking Assistant is a multi-tenant conversational reservation platform designed to support diverse business domains (such as hospitality, automotive sales, legal consultations, and beauty/wellness) using a single, unified codebase. The platform decouples conversational booking capture from domain-specific operations.
+The chat agent does not collect payments, verify identity documents, or schedule complex appointment slots. Instead, it guides the customer through catalog discovery, extracts essential contact information into structured slots, confirms the reservation details, generates an immutable Booking ID, and routes the ticket to assigned staff members. Assigned staff then manage dates, paperwork, and financial transactions offline via their dedicated dashboard.
++----------------------------------------------------------------------------------------------------+
+|                                    MERCHANT / CLIENT ENTRYPOINTS                                   |
+|   +---------------------------------------+             +---------------------------------------+  |
+|   |  Customer Chat UI (Web / Embed / App) |             |  Staff & Merchant Dashboards (React)  |  |
+|   +-----------------------------------+---+             +-------------------+-------------------+  |
++---------------------------------------|-------------------------------------|----------------------+
+                                        |                                     |
+                                        v                                     v
++----------------------------------------------------------------------------------------------------+
+|                                FASTAPI DISTRIBUTED BACKEND ENGINE                                  |
+|   - Slot-Filling Conversation State Machine         - Round-Robin & Least-Loaded Staff Router      |
+|   - Dynamic BYOK Multi-LLM Provider Engine          - Deterministic Pydantic Validation Handlers   |
++------------------+------------------------------------+----------------------------------+---------+
+                   |                                    |                                  |
+                   v                                    v                                  v
++------------------+------------------+ +---------------+------------------+ +--------------+-------+
+|        POSTGRESQL RELATIONAL        | |        MILVUS VECTOR ENGINE      | |   AWS S3 / MINIO      |
+| - Categories & Services Schema      | | - catalog_semantic_idx (HNSW)    | | - Service Visual Media|
+| - Staff Routing & Queue State       | | - merchant_knowledge_idx (Docs)  | | - Ingestion Archives  |
+| - Booking Ledger & Feedback Audit   | | - Cosine Distance Metric         | | - Binary Documents    |
++-------------------------------------+ +----------------------------------+ +---------------------+
+Key Functional Pillars
+Universal Catalog Schema: Standardized structure across verticals: Category $\rightarrow$ Service (Name, Image, Description, Indicative Price Range).
+Opportunistic Slot Filling: Supports full-string extraction (all information provided at once), multi-turn incremental collection, and natural-language matching without conversational dead ends.
+Dynamic BYOK LLM Engine: Supports merchant-configured API keys, custom system prompts, and multiple model providers (OpenAI, Anthropic, Groq, Ollama) with AES-256 encrypted key storage.
+Dual-Index Vector Architecture (Milvus): Isolates catalog semantic classification (intent/clarification) from general company knowledge retrieval (RAG).
+Strict No-Handoff Architecture: Human intervention occurs exclusively through asynchronous dashboard routing rather than live conversational transfers.
+2. End-to-End System Workflows
+Code snippet
+flowchart LR
+    %% =========================================================================
+    %% SUBGRAPH 1: INGESTION & STORAGE SYNC WORKFLOW
+    %% =========================================================================
+    subgraph Subgraph_Ingestion ["1. Merchant Configuration & Ingestion"]
+        direction LR
+        ING_START["Admin Package Upload"] --> ING_SPLIT{"Package Type?"}
+        %% Unstructured Knowledge Docs
+        ING_SPLIT -- "Knowledge Docs (PDF/Docx)" --> API_DOC["POST /api/v1/admin/knowledge-docs"]
+        API_DOC --> DOC_S3["Store Raw Doc in S3"]
+        DOC_S3 --> CHUNK["Chunking (512 tokens / 10% overlap)"]
+        CHUNK --> EMBED_DOC["Generate Dense Vector (1536-dim)"]
+        EMBED_DOC --> MILVUS_DOC[("Milvus: merchant_knowledge_idx")]
+        %% Tabular Catalog & Images
+        ING_SPLIT -- "Catalog (.xlsx/.csv) + Images (.zip)" --> API_CAT["POST /api/v1/admin/catalog/upload"]
+        API_CAT --> VAL_MEDIA{"Validate Columns & Media Files"}
+        VAL_MEDIA -- "Missing Media / Schema Invalid" --> ERR_ING["Return 422 Validation Error"]
+        VAL_MEDIA -- "Passed" --> UNPACK_S3["Upload Images to S3: merchants/{id}/services/{uuid}.webp"]
+        UNPACK_S3 --> PG_ING_TX["PostgreSQL: BEGIN TX"]
+        PG_ING_TX --> PG_CAT_INS["Upsert Categories"]
+        PG_CAT_INS --> PG_SRV_INS["Upsert Services with S3 Media URIs & Staff IDs"]
+        PG_SRV_INS --> PG_ING_COMMIT["PostgreSQL: COMMIT TX"]
+        PG_ING_COMMIT --> EMBED_SRV["Embed: '{service_name}: {service_description}'"]
+        EMBED_SRV --> MILVUS_CAT[("Milvus: catalog_semantic_idx")]
+    end
+    %% =========================================================================
+    %% SUBGRAPH 2: RUNTIME CHAT AGENT CONVERSATION FLOW
+    %% =========================================================================
+    subgraph Subgraph_Booking ["2. Customer Conversational Booking Flow"]
+        direction LR
+        B_START["Customer Greeting / Intent"] --> API_CHK_CAT["GET /api/v1/categories?status=active"]
+        API_CHK_CAT --> DB_CAT_EVAL[("Query PostgreSQL: Active Categories")]
+        DB_CAT_EVAL --> HAS_ACTIVE{"Categories Configured?"}
+        %% Empty Catalog Guard
+        HAS_ACTIVE -- "No (Empty Array)" --> B_UNAVAIL["Display: 'Bookings are currently unavailable'"]
+        B_UNAVAIL --> B_HALT(["Session Terminated"])
+        %% Discovery & Semantic Matching
+        HAS_ACTIVE -- "Yes" --> B_MATCH_TYPE{"User Request Type?"}
+        B_MATCH_TYPE -- "Browse Categories" --> B_CAT_LIST["Render Active Category Cards"]
+        B_CAT_LIST --> B_SEL_CAT["User Selects Category ID"]
+        B_SEL_CAT --> API_GET_SRVS["GET /api/v1/categories/{id}/services"]
+        API_GET_SRVS --> B_SHOW_CARD["Render Service Card (Name, S3 Image, Description, Price)"]
+        B_MATCH_TYPE -- "Natural Language Description" --> MILVUS_SRCH["Vector Query: catalog_semantic_idx"]
+        MILVUS_SRCH --> VEC_DIST{"Top Match Distance Delta < Threshold?"}
+        VEC_DIST -- "Yes (Ambiguous Match)" --> B_CLARIFY["Agent Asks Single Clarifying Question"]
+        B_CLARIFY --> B_SHOW_CARD
+        VEC_DIST -- "No (Exact/Distinct Match)" --> B_SHOW_CARD
+        %% Extraction, Read-Back & Commit
+        B_SHOW_CARD --> B_SLOT["Extract Slots: Full Name, Phone, Optional Free-Text Note"]
+        B_SLOT --> B_READBACK["Agent Explicit Read-Back: Name, Phone, Service & Notes"]
+        B_READBACK --> B_CONF{"User Explicitly Confirms?"}
+        B_CONF -- "No (Amend Info)" --> B_SLOT
+        B_CONF -- "Yes" --> API_BOOK_POST["POST /api/v1/bookings"]
+        API_BOOK_POST --> ROUTER_RR["Routing Engine: Round-Robin Active Staff for Service"]
+        ROUTER_RR --> PG_BOOK_INS["PostgreSQL: INSERT bookings (status='pending', unique_booking_id)"]
+        PG_BOOK_INS --> STAFF_BUS["Push Notification to Assigned Staff Queue"]
+        STAFF_BUS --> B_DISP_ID["Agent Displays Booking ID & Advises Staff Will Contact"]
+        B_DISP_ID --> API_FEED_1["POST /api/v1/feedback"]
+        API_FEED_1 --> B_FIN(["Booking Workflow Complete"])
+    end
+    %% =========================================================================
+    %% SUBGRAPH 3: STAFF PANEL OPERATIONS & LIFECYCLE
+    %% =========================================================================
+    subgraph Subgraph_Staff ["3. Staff Operations & Lifecycle Flow"]
+        direction LR
+        S_AUTH["POST /api/v1/auth/staff/login"] --> S_QUEUE["GET /api/v1/staff/bookings?status=pending"]
+        S_QUEUE --> S_REVIEW["Staff Reviews Incoming Contact Details & Notes"]
+        S_REVIEW --> S_DECIDE{"Staff Decision: Accept or Reject?"}
+        %% Staff Reject & Cascade Branch
+        S_DECIDE -- "Reject" --> API_REJ["PATCH /api/v1/staff/bookings/{id}/decision (reject)"]
+        API_REJ --> S_CASCADE_CHK{"Alternate Staff Assigned to Service?"}
+        S_CASCADE_CHK -- "Yes (Re-route)" --> S_REASSIGN["Reassign to Next Active Staff in Round-Robin"]
+        S_REASSIGN --> S_QUEUE
+        S_CASCADE_CHK -- "No (Pool Exhausted)" --> S_SET_REJ["Update Status: 'rejected'"]
+        S_SET_REJ --> S_NOTIF_CUST["Dispatch Rejection Notification to Customer"]
+        S_NOTIF_CUST --> S_REJ_END(["Booking Terminated"])
+        %% Staff Accept & Finalize Branch
+        S_DECIDE -- "Accept" --> API_ACC["PATCH /api/v1/staff/bookings/{id}/decision (accept)"]
+        API_ACC --> S_OFFLINE["Staff Contacts Customer Offline (Call/WhatsApp/Email)"]
+        S_OFFLINE --> S_FORMALITIES["Finalize Formalities: Date/Time Slot, Payment, Retainer, Documents"]
+        S_FORMALITIES --> API_FIN["PATCH /api/v1/staff/bookings/{id}/finalize"]
+        API_FIN --> PG_FIN_TX["PostgreSQL: UPDATE status='finalized', payment_status='paid'"]
+        PG_FIN_TX --> S_FIN_END(["Booking Finalized & Locked"])
+    end
+    %% =========================================================================
+    %% SUBGRAPH 4: STATUS INQUIRY & CANCELLATION FLOWS
+    %% =========================================================================
+    subgraph Subgraph_Status_Cancel ["4. Status Inquiry & Verified Cancellation"]
+        direction LR
+        %% Status Inquiry Branch
+        INQ_REQ["User Status Inquiry (Provides Booking ID)"] --> INQ_CHALLENGE["Prompt for Registered Phone Number"]
+        INQ_CHALLENGE --> API_STAT_CHK["POST /api/v1/bookings/status-check"]
+        API_STAT_CHK --> DB_STAT_EVAL[("Query PostgreSQL: ID & Phone Match")]
+        DB_STAT_EVAL --> INQ_MATCH{"Verified?"}
+        INQ_MATCH -- "No" --> INQ_ERR["Return 404: Generic Not Found (Protect Privacy)"]
+        INQ_MATCH -- "Yes" --> INQ_FETCH["Retrieve Exact Real-Time Database Status"]
+        INQ_FETCH --> INQ_DISP["Agent Displays Un-Fabricated Current Status"]
+        INQ_DISP --> API_FEED_2["POST /api/v1/feedback"]
+        %% Cancellation Branch
+        CAN_REQ["User Cancellation Request (Provides Booking ID)"] --> API_VER_POST["POST /api/v1/bookings/verify"]
+        API_VER_POST --> DB_VER_QUERY[("Verify Record Ownership & Current Status")]
+        DB_VER_QUERY --> CAN_OWN{"Ownership Valid?"}
+        CAN_OWN -- "No" --> CAN_REJ_UNAUTH["Decline Request Without Exposing Metadata"]
+        CAN_OWN -- "Yes" --> CAN_STATE{"Current Booking Status?"}
+        CAN_STATE -- "Status: cancelled" --> CAN_ALREADY["Inform: 'This reservation is already cancelled'"]
+        CAN_STATE -- "Status: finalized" --> CAN_LOCKED["Inform: 'Booking is locked/paid. Please contact staff directly'"]
+        CAN_STATE -- "Status: pending | accepted" --> CAN_TOKEN["Issue Short-Lived JWT Verification Token"]
+        CAN_TOKEN --> CAN_CONF_PROMPT["Agent Reads Back Service Details & Asks Confirmation"]
+        CAN_CONF_PROMPT --> CAN_EXPLICIT{"User Explicitly Confirms?"}
+        CAN_EXPLICIT -- "No" --> CAN_ABORT["Inform: 'Cancellation aborted. Booking remains active'"]
+        CAN_EXPLICIT -- "Yes" --> API_CAN_EXEC["POST /api/v1/bookings/{id}/cancel (Bearer Token)"]
+        API_CAN_EXEC --> PG_CAN_TX["PostgreSQL: UPDATE status='cancelled', cancelled_at=NOW()"]
+        PG_CAN_TX --> CAN_STAFF_ALERT["Push Real-Time Alert to Assigned Staff Panel"]
+        CAN_STAFF_ALERT --> API_FEED_3["POST /api/v1/feedback"]
+        API_FEED_3 --> CAN_FIN(["Cancellation Workflow Complete"])
+    end
+    %% Subgraph Connections
+    PG_ING_COMMIT -. "Data Ready" .-> DB_CAT_EVAL
+    STAFF_BUS -. "Pushes To" .-> S_QUEUE
+    PG_FIN_TX -. "Updates State" .-> DB_STAT_EVAL
+3. Production Monorepo File Tree
+Plaintext
+service-booking-platform/
+├── .dockerignore
+├── .gitignore
+├── docker-compose.yml                      # Production topology: PostgreSQL, Milvus, MinIO, Backend (uv), Frontend (Node)
+├── README.md                               # Root setup, architectural patterns, and operations guide
+│
+├── backend/
+│   ├── .dockerignore
+│   ├── Dockerfile                          # Multi-stage build using astral-sh/uv:python3.12-bookworm-slim
+│   ├── pyproject.toml                      # Package config, linters (ruff), typecheckers (mypy), test suites (pytest)
+│   ├── uv.lock                             # Fully pinned, deterministic Python dependency graph
+│   ├── alembic.ini                         # Database migration configuration
+│   ├── migrations/
+│   │   ├── env.py                          # Alembic async migration environment loading ORM schemas
+│   │   ├── script.py.mako                  # Migration revision template
+│   │   └── versions/                       # Timestamped DDL migration scripts
+│   └── app/
+│       ├── __init__.py
+│       ├── main.py                         # FastAPI factory, lifespan lifecycle context, CORS, exception hooks
+│       ├── core/                           # Foundation layer
+│       │   ├── __init__.py
+│       │   ├── config.py                   # Pydantic BaseSettings loading validated environment configurations
+│       │   ├── database.py                 # Async SQLAlchemy engine & async_sessionmaker factory
+│       │   ├── security.py                 # AES-256-GCM cipher for LLM API keys & ephemeral JWT tokens
+│       │   └── logging.py                  # Structured JSON logging pipeline
+│       ├── models/                         # Relational database models (SQLAlchemy ORM)
+│       │   ├── __init__.py
+│       │   ├── base.py                     # Declarative base model declaring UUID PKs and timestamp mixins
+│       │   ├── merchant.py                 # Merchant profile and agent configuration
+│       │   ├── category.py                 # Service categories (name, description, image_url, is_active)
+│       │   ├── service.py                  # Service entities (name, description, s3_image_url, price, is_active)
+│       │   ├── staff.py                    # Staff entities (name, email, password_hash, status, workload)
+│       │   ├── service_staff.py            # Junction table: Many-to-many service-to-staff assignment
+│       │   ├── booking.py                  # Bookings table (booking_id, status, customer_name, phone, note)
+│       │   └── feedback.py                 # Customer interaction feedback logs
+│       ├── schemas/                        # Pydantic v2 validation and serialization models
+│       │   ├── __init__.py
+│       │   ├── config.py                   # AgentConfigUpdate, AgentConfigResponse (LLM provider, prompt, key)
+│       │   ├── catalog.py                  # CategoryRead, CategoryCreate, ServiceRead, ServiceCreate
+│       │   ├── booking.py                  # BookingCreate, BookingRead, StatusCheckRequest, VerifyCancellationRequest
+│       │   ├── staff.py                    # StaffLoginRequest, StaffQueueItem, DecisionRequest, FinalizeRequest
+│       │   └── feedback.py                 # FeedbackCreate, FeedbackRead
+│       ├── api/                            # Transport and HTTP routing layer
+│       │   ├── __init__.py
+│       │   ├── deps.py                     # Dependency injection (Async DB sessions, staff auth, storage client)
+│       │   └── v1/
+│       │       ├── __init__.py
+│       │       ├── router.py               # Aggregates sub-routers into /api/v1
+│       │       └── endpoints/
+│       │           ├── auth.py             # Authentication endpoints (staff login, merchant login)
+│       │           ├── catalog.py          # Public discovery endpoints (categories, services)
+│       │           ├── bookings.py         # Customer booking lifecycle endpoints (create, status, verify, cancel)
+│       │           ├── staff.py            # Staff dashboard endpoints (queue, decisions, finalization)
+│       │           ├── admin.py            # Admin catalog uploads, knowledge-doc uploads, staff management
+│       │           ├── config.py           # Merchant agent config (LLM selection, prompt, BYOK)
+│       │           └── feedback.py         # Customer feedback capture endpoint
+│       ├── services/                       # Isolated business logic and coordination
+│       │   ├── __init__.py
+│       │   ├── catalog_service.py          # Active status checking, category discovery, service retrieval
+│       │   ├── booking_service.py          # Booking ID generation, state machine transitions, ownership validation
+│       │   ├── router_service.py           # Round-robin staff distribution and rejection cascade logic
+│       │   ├── staff_service.py            # Workload calculation, queue queries, offline finalization
+│       │   └── storage_service.py          # AWS S3 / MinIO client handling image verification and presigned URLs
+│       ├── rag/                            # Vector DB, Semantic Matching, and Dynamic LLM Provider Layer
+│       │   ├── __init__.py
+│       │   ├── client.py                   # Milvus connection pool lifecycle
+│       │   ├── collections.py              # Collection schemas (catalog_semantic_idx, merchant_knowledge_idx)
+│       │   ├── llm_factory.py              # Dynamic LLM provider factory (OpenAI, Anthropic, Groq, Ollama)
+│       │   ├── embeddings.py               # Dense vector embedding generator client
+│       │   ├── indexer.py                  # Document chunking and batch upsert to Milvus
+│       │   └── retriever.py                # Semantic catalog search, disambiguation, and knowledge base retrieval
+│       └── utils/                          # Cross-cutting utilities
+│           ├── __init__.py
+│           ├── excel_parser.py             # XLSX/CSV parsing, column schema verification, media mapping
+│           └── id_generator.py             # Prefix-based collision-resistant short booking ID generator
+│
+└── frontend/
+    ├── .dockerignore
+    ├── Dockerfile                          # Multi-stage Node 22 (Alpine) dev & production Nginx runner
+    ├── package.json                        # Frontend packages, scripts, and engine configurations
+    ├── package-lock.json                   # Exact pinned frontend dependencies
+    ├── tsconfig.json                       # Root TypeScript project configuration
+    ├── tsconfig.app.json                   # Browser application TypeScript compiler settings
+    ├── tsconfig.node.json                  # Node build tools TypeScript compiler settings
+    ├── vite.config.ts                      # Vite configuration, Docker polling, and path aliases (@/)
+    ├── tailwind.config.ts                  # Tailwind design tokens and layout styling rules
+    ├── postcss.config.js                   # PostCSS configuration
+    ├── nginx.conf                          # Production SPA reverse proxy and routing fallback
+    └── src/
+        ├── main.tsx                        # Application entry point mounting React root
+        ├── App.tsx                         # Client route provider (Chat Agent, Staff Panel, Admin)
+        ├── index.css                       # Global Tailwind styles and theme baseline
+        ├── components/                     # Reusable UI component library
+        │   ├── ui/                         # Atomic primitives (Button, Modal, Input, Badge, Toast, Select)
+        │   ├── agent/                      # ChatWindow, ServiceCard, DisambiguationList, FeedbackModal
+        │   ├── staff/                      # QueueTable, DecisionModal, FinalizeModal, StatusFilter
+        │   └── admin/                      # LLMConfigForm, StaffManagerTable, CatalogUploadDropzone
+        ├── pages/                          # Primary application views
+        │   ├── ChatAgentPage.tsx           # User-facing conversational booking experience
+        │   ├── StaffDashboardPage.tsx      # Staff panel for booking queue review, accept/reject, and finalization
+        │   └── MerchantAdminPage.tsx       # Merchant admin console (LLM settings, catalog upload, staff management)
+        ├── hooks/                          # Custom React logic hooks
+        │   ├── useChatAgent.ts             # Orchestrates conversational state machine and message history
+        │   ├── useStaffQueue.ts            # Manages real-time staff reservation queue queries and mutations
+        │   └── useMerchantConfig.ts        # Handles LLM provider selection, prompt editing, and catalog ingestion
+        ├── services/                       # Typed HTTP service layer
+        │   ├── apiClient.ts                # Axios instance with interceptors, timeouts, and error handling
+        │   ├── catalogApi.ts               # Catalog endpoints client
+        │   ├── bookingApi.ts               # Booking, verification, status inquiry, and cancellation client
+        │   ├── staffApi.ts                 # Staff operations and queue client
+        │   └── adminApi.ts                 # Admin configuration, staff provisioning, and catalog uploads
+        └── types/                          # Shared TypeScript interface contracts
+            ├── config.types.ts             # LLMProvider, AgentConfig, SystemPrompt interfaces
+            ├── catalog.types.ts            # Category, Service, Media definitions
+            ├── booking.types.ts            # Booking, Status, VerificationToken interfaces
+            └── staff.types.ts              # Staff profile, queue item, and decision models
+4. Backend Source Code & API Route Implementations
+Configuration & Cryptography
+backend/app/core/config.py
+Python
+from typing import List
+from pydantic_settings import BaseSettings
+from pydantic import Field
+class Settings(BaseSettings):
+    PROJECT_NAME: str = "Universal Service Booking Assistant"
+    API_V1_STR: str = "/api/v1"
+    ENVIRONMENT: str = "development"
+    DEBUG: bool = True
+    # Database
+    DATABASE_URL: str = Field(
+        default="postgresql+asyncpg://postgres:postgres@postgres:5432/booking_db"
+    )
+    # Milvus Vector Engine
+    MILVUS_HOST: str = "milvus"
+    MILVUS_PORT: str = "19530"
+    # AWS S3 / MinIO Storage
+    AWS_ENDPOINT_URL: str | None = "http://minio:9000"
+    AWS_ACCESS_KEY_ID: str = "minioadmin"
+    AWS_SECRET_ACCESS_KEY: str = "minioadmin"
+    AWS_REGION: str = "us-east-1"
+    S3_BUCKET_NAME: str = "catalog-media"
+    # Cryptography & Ephemeral Tokens
+    SECRET_KEY: str = Field(default="production-insecure-change-key-min-32-chars-long")
+    AES_KEY: str = Field(default="16_32_byte_aes_gcm_encryption_key")
+    JWT_ALGORITHM: str = "HS256"
+    JWT_EXPIRATION_MINUTES: int = 15
+    # CORS Origins
+    CORS_ORIGINS: List[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
+    class Config:
+        case_sensitive = True
+        env_file = ".env"
+settings = Settings()
+backend/app/core/security.py
+Python
+import base64
+import json
+from datetime import datetime, timedelta, timezone
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from jose import jwt, JWTError
+from app.core.config import settings
+def encrypt_secret(plain_text: str) -> str:
+    """Encrypts external API keys using AES-256-GCM prior to PostgreSQL insertion."""
+    key = settings.AES_KEY.encode()[:32].ljust(32, b"0")
+    aesgcm = AESGCM(key)
+    nonce = datetime.now(timezone.utc).isoformat()[:12].encode()
+    encrypted = aesgcm.encrypt(nonce, plain_text.encode(), None)
+    return base64.b64encode(nonce + encrypted).decode()
+def decrypt_secret(cipher_text: str) -> str:
+    """Decrypts AES-256-GCM cipher string into plaintext API key."""
+    key = settings.AES_KEY.encode()[:32].ljust(32, b"0")
+    raw_data = base64.b64decode(cipher_text.encode())
+    nonce = raw_data[:12]
+    encrypted_payload = raw_data[12:]
+    aesgcm = AESGCM(key)
+    return aesgcm.decrypt(nonce, encrypted_payload, None).decode()
+def create_cancellation_token(booking_id: str, phone: str) -> str:
+    """Issues an ephemeral 15-minute JWT for cancellation verification."""
+    expire = datetime.now(timezone.utc) + timedelta(minutes=settings.JWT_EXPIRATION_MINUTES)
+    to_encode = {
+        "sub": booking_id,
+        "phone": phone,
+        "scope": "booking:cancellation",
+        "exp": expire
+    }
+    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+def verify_cancellation_token(token: str, expected_booking_id: str) -> bool:
+    """Validates an ephemeral JWT token against the target Booking ID."""
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
+        if payload.get("sub") != expected_booking_id or payload.get("scope") != "booking:cancellation":
+            return False
+        return True
+    except JWTError:
+        return False
+Database ORM Relational Schemas
+backend/app/models/base.py
+Python
+import uuid
+from datetime import datetime, timezone
+from sqlalchemy import DateTime
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+class Base(DeclarativeBase):
+    pass
+class TimestampMixin:
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+backend/app/models/catalog.py
+Python
+import uuid
+from sqlalchemy import Boolean, ForeignKey, String, Text
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+from app.models.base import Base, TimestampMixin
+class Category(Base, TimestampMixin):
+    __tablename__ = "categories"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    merchant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    image_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    services: Mapped[list["Service"]] = relationship("Service", back_populates="category", cascade="all, delete-orphan")
+class Service(Base, TimestampMixin):
+    __tablename__ = "services"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    category_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("categories.id"), nullable=False)
+    name: Mapped[str] = mapped_column(String(150), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    image_url: Mapped[str] = mapped_column(String(512), nullable=False)
+    price_range: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    category: Mapped["Category"] = relationship("Category", back_populates="services")
+    staff_assignments: Mapped[list["ServiceStaff"]] = relationship("ServiceStaff", back_populates="service")
+backend/app/models/booking.py
+Python
+import uuid
+from enum import Enum
+from sqlalchemy import ForeignKey, String, Text
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import Mapped, mapped_column
+from app.models.base import Base, TimestampMixin
+class BookingStatus(str, Enum):
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+    FINALIZED = "finalized"
+    CANCELLED = "cancelled"
+class Booking(Base, TimestampMixin):
+    __tablename__ = "bookings"
+    id: Mapped[str] = mapped_column(String(16), primary_key=True, index=True) # e.g. #HB1042
+    merchant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True, nullable=False)
+    service_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("services.id"), nullable=False)
+    staff_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("staff.id"), nullable=True)
+    customer_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    customer_phone: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    customer_email: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    channel: Mapped[str] = mapped_column(String(32), default="web", nullable=False)
+    status: Mapped[BookingStatus] = mapped_column(String(24), default=BookingStatus.PENDING, nullable=False)
+    rejection_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    offline_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+Endpoints & Business Logic
+backend/app/api/v1/endpoints/bookings.py
+Python
+from fastapi import APIRouter, Depends, HTTPException, Header, status
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from app.api.deps import get_db
+from app.models.booking import Booking, BookingStatus
+from app.models.service import Service
+from app.schemas.booking import (
+    BookingCreate, BookingResponse, StatusCheckRequest, StatusCheckResponse,
+    VerifyCancellationRequest, VerifyCancellationResponse, CancelExecutionRequest
+)
+from app.services.booking_service import create_booking_record, get_verified_booking
+from app.services.router_service import assign_staff_round_robin
+from app.core.security import create_cancellation_token, verify_cancellation_token
+router = APIRouter()
+@router.post("", response_model=BookingResponse, status_code=status.HTTP_201_CREATED)
+async def create_booking(payload: BookingCreate, db: AsyncSession = Depends(get_db)):
+    """Creates a booking record with status 'pending' and routes to assigned staff[cite: 1]."""
+    service = await db.get(Service, payload.service_id)
+    if not service or not service.is_active:
+        raise HTTPException(status_code=404, detail="Service not found or currently inactive")
+    # Evaluate Round-Robin Distribution across assigned staff
+    assigned_staff_id = await assign_staff_round_robin(db, service.id)
+    booking = await create_booking_record(
+        db=db,
+        service=service,
+        assigned_staff_id=assigned_staff_id,
+        payload=payload
+    )
+    return BookingResponse(
+        booking_id=booking.id,
+        status=booking.status,
+        assigned_staff_id=booking.staff_id,
+        created_at=booking.created_at
+    )
+@router.post("/status-check", response_model=StatusCheckResponse)
+async def check_booking_status(payload: StatusCheckRequest, db: AsyncSession = Depends(get_db)):
+    """Verifies phone number against the booking ID and returns the real-time status[cite: 1]."""
+    stmt = (
+        select(Booking, Service.name)
+        .join(Service, Booking.service_id == Service.id)
+        .where(Booking.id == payload.booking_id, Booking.customer_phone == payload.phone)
+    )
+    result = await db.execute(stmt)
+    row = result.first()
+    if not row:
+        # Prevent ID harvesting: return generic 404
+        raise HTTPException(status_code=404, detail="Booking ID not found or details mismatch")
+    booking, service_name = row
+    return StatusCheckResponse(
+        booking_id=booking.id,
+        status=booking.status,
+        service_name=service_name,
+        created_at=booking.created_at
+    )
+@router.post("/verify", response_model=VerifyCancellationResponse)
+async def verify_cancellation_eligibility(payload: VerifyCancellationRequest, db: AsyncSession = Depends(get_db)):
+    """Validates booking ownership and terminal status for cancellations[cite: 1]."""
+    booking = await get_verified_booking(db, payload.booking_id, payload.phone_or_name)
+    if not booking:
+        raise HTTPException(status_code=404, detail="Reservation not found or unauthorized")
+    if booking.status == BookingStatus.CANCELLED:
+        return VerifyCancellationResponse(
+            is_valid=True,
+            cancellation_eligible=False,
+            reason="ALREADY_CANCELLED",
+            message="This reservation is already cancelled."
+        )
+    if booking.status == BookingStatus.FINALIZED:
+        return VerifyCancellationResponse(
+            is_valid=True,
+            cancellation_eligible=False,
+            reason="ALREADY_FINALIZED",
+            message="Booking is finalized/paid. Self-cancellation locked. Please contact staff directly."
+        )
+    # Issue an ephemeral JWT token for explicit confirmation
+    token = create_cancellation_token(booking.id, booking.customer_phone)
+    service = await db.get(Service, booking.service_id)
+    return VerifyCancellationResponse(
+        is_valid=True,
+        cancellation_eligible=True,
+        booking_id=booking.id,
+        service_name=service.name if service else "Unknown Service",
+        customer_name=booking.customer_name,
+        verification_token=token
+    )
+@router.post("/{booking_id}/cancel", status_code=status.HTTP_200_OK)
+async def execute_cancellation(
+    booking_id: str,
+    payload: CancelExecutionRequest,
+    authorization: str = Header(...),
+    db: AsyncSession = Depends(get_db)
+):
+    """Cancels the reservation upon explicit user confirmation[cite: 1]."""
+    token = authorization.replace("Bearer ", "").strip()
+    if not verify_cancellation_token(token, booking_id):
+        raise HTTPException(status_code=401, detail="Invalid or expired verification session")
+    booking = await db.get(Booking, booking_id)
+    if not booking or booking.status not in (BookingStatus.PENDING, BookingStatus.ACCEPTED):
+        raise HTTPException(status_code=400, detail="Booking cannot be cancelled in its current state")
+    booking.status = BookingStatus.CANCELLED
+    booking.rejection_reason = payload.cancellation_reason
+    await db.commit()
+    return {"booking_id": booking.id, "status": BookingStatus.CANCELLED, "message": "Successfully cancelled"}
+backend/app/api/v1/endpoints/staff.py
+Python
+import uuid
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from app.api.deps import get_db, get_current_staff
+from app.models.booking import Booking, BookingStatus
+from app.models.staff import Staff
+from app.models.service import Service
+from app.schemas.staff import StaffDecisionRequest, StaffFinalizeRequest, StaffQueueItemResponse
+from app.services.router_service import cascade_staff_rejection
+router = APIRouter()
+@router.get("/bookings", response_model=list[StaffQueueItemResponse])
+async def list_assigned_bookings(
+    status_filter: BookingStatus | None = None,
+    current_staff: Staff = Depends(get_current_staff),
+    db: AsyncSession = Depends(get_db)
+):
+    """Retrieves real-time assigned reservation queue for the authenticated staff member[cite: 1]."""
+    stmt = (
+        select(Booking, Service.name)
+        .join(Service, Booking.service_id == Service.id)
+        .where(Booking.staff_id == current_staff.id)
+    )
+    if status_filter:
+        stmt = stmt.where(Booking.status == status_filter)
+    stmt = stmt.order_by(Booking.created_at.desc())
+    result = await db.execute(stmt)
+    records = []
+    for booking, srv_name in result.all():
+        records.append(
+            StaffQueueItemResponse(
+                booking_id=booking.id,
+                service_name=srv_name,
+                customer_name=booking.customer_name,
+                customer_phone=booking.customer_phone,
+                customer_email=booking.customer_email,
+                note=booking.note,
+                status=booking.status,
+                created_at=booking.created_at
+            )
+        )
+    return records
+@router.patch("/bookings/{booking_id}/decision")
+async def update_staff_decision(
+    booking_id: str,
+    payload: StaffDecisionRequest,
+    current_staff: Staff = Depends(get_current_staff),
+    db: AsyncSession = Depends(get_db)
+):
+    """Records staff decision (accept/reject). Rejection triggers round-robin cascading[cite: 1]."""
+    booking = await db.get(Booking, booking_id)
+    if not booking or booking.staff_id != current_staff.id:
+        raise HTTPException(status_code=404, detail="Booking not found in staff queue")
+    if payload.action == "accept":
+        booking.status = BookingStatus.ACCEPTED
+        await db.commit()
+        return {"booking_id": booking.id, "status": BookingStatus.ACCEPTED, "re_routed": False}
+    elif payload.action == "reject":
+        # Check if alternative staff exist for re-routing
+        re_routed = await cascade_staff_rejection(db, booking, current_staff.id, payload.reason)
+        return {
+            "booking_id": booking.id,
+            "status": booking.status,
+            "re_routed": re_routed,
+            "message": "Reassigned to alternate staff" if re_routed else "Rejected. Customer notified."
+        }
+@router.patch("/bookings/{booking_id}/finalize")
+async def finalize_offline_booking(
+    booking_id: str,
+    payload: StaffFinalizeRequest,
+    current_staff: Staff = Depends(get_current_staff),
+    db: AsyncSession = Depends(get_db)
+):
+    """Finalizes booking after offline formalities (dates, payments, paperwork) are completed[cite: 1]."""
+    booking = await db.get(Booking, booking_id)
+    if not booking or booking.staff_id != current_staff.id:
+        raise HTTPException(status_code=404, detail="Booking not found in staff queue")
+    booking.status = BookingStatus.FINALIZED
+    booking.offline_notes = f"Scheduled: {payload.scheduled_date} | Notes: {payload.notes} | PayStatus: {payload.payment_status}"
+    await db.commit()
+    return {"booking_id": booking.id, "status": BookingStatus.FINALIZED, "finalized_at": booking.updated_at}
+RAG & Dynamic Multi-LLM Provider Engine
+backend/app/rag/llm_factory.py
+Python
+from typing import Any
+import openai
+import anthropic
+from app.core.security import decrypt_secret
+class LLMProviderFactory:
+    """Dynamically instantiates and returns configured LLM client per merchant configuration."""
+    @staticmethod
+    def get_completion(
+        provider: str,
+        encrypted_api_key: str,
+        model_id: str,
+        system_prompt: str,
+        messages: list[dict[str, str]],
+        temperature: float = 0.2
+    ) -> str:
+        api_key = decrypt_secret(encrypted_api_key)
+        if provider.lower() == "openai":
+            client = openai.OpenAI(api_key=api_key)
+            formatted_messages = [{"role": "system", "content": system_prompt}] + messages
+            response = client.chat.completions.create(
+                model=model_id,
+                messages=formatted_messages,
+                temperature=temperature
+            )
+            return response.choices[0].message.content or ""
+        elif provider.lower() == "anthropic":
+            client = anthropic.Anthropic(api_key=api_key)
+            response = client.messages.create(
+                model=model_id,
+                max_tokens=1024,
+                system=system_prompt,
+                messages=messages,
+                temperature=temperature
+            )
+            return response.content[0].text
+        elif provider.lower() == "groq":
+            client = openai.OpenAI(
+                base_url="https://api.groq.com/openai/v1",
+                api_key=api_key
+            )
+            formatted_messages = [{"role": "system", "content": system_prompt}] + messages
+            response = client.chat.completions.create(
+                model=model_id,
+                messages=formatted_messages,
+                temperature=temperature
+            )
+            return response.choices[0].message.content or ""
+        else:
+            raise ValueError(f"Unsupported LLM provider: {provider}")
+backend/app/rag/retriever.py
+Python
+from pymilvus import Collection
+from app.rag.client import milvus_client
+from app.rag.embeddings import generate_dense_embedding
+class VectorRetriever:
+    """Performs semantic catalog lookup and disambiguation queries."""
+    @staticmethod
+    async def match_catalog_intent(
+        merchant_id: str,
+        user_query: str,
+        score_threshold: float = 0.78,
+        ambiguity_delta: float = 0.06
+    ) -> dict[str, Any]:
+        collection = Collection("catalog_semantic_idx", using=milvus_client)
+        collection.load()
+        vector = await generate_dense_embedding(user_query)
+        search_params = {"metric_type": "COSINE", "params": {"ef": 64}}
+        results = collection.search(
+            data=[vector],
+            anns_field="vector",
+            param=search_params,
+            limit=3,
+            expr=f'merchant_id == "{merchant_id}"',
+            output_fields=["service_id", "category_id"]
+        )
+        if not results or len(results[0]) == 0:
+            return {"match_type": "NONE", "service_ids": []}
+        top_hit = results[0][0]
+        if top_hit.distance < score_threshold:
+            return {"match_type": "LOW_CONFIDENCE", "service_ids": []}
+        # Check for ambiguous matches requiring clarification
+        if len(results[0]) > 1:
+            second_hit = results[0][1]
+            if (top_hit.distance - second_hit.distance) < ambiguity_delta:
+                return {
+                    "match_type": "AMBIGUOUS",
+                    "service_ids": [hit.entity.get("service_id") for hit in results[0][:2]]
+                }
+        return {
+            "match_type": "EXACT",
+            "service_id": top_hit.entity.get("service_id")
+        }
+5. Frontend Client Implementation
+Customer Chat Interface
+frontend/src/pages/ChatAgentPage.tsx
+TypeScript
+import React, { useState, useEffect } from "react";
+import { useChatAgent } from "@/hooks/useChatAgent";
+import { ServiceCard } from "@/components/agent/ServiceCard";
+import { FeedbackModal } from "@/components/agent/FeedbackModal";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+export const ChatAgentPage: React.FC = () => {
+  const {
+    messages,
+    activeServiceCard,
+    catalogUnavailable,
+    isAwaitingFeedback,
+    sendMessage,
+    confirmBooking,
+    submitFeedback,
+  } = useChatAgent();
+  const [inputVal, setInputVal] = useState("");
+  const handleSend = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inputVal.trim()) return;
+    sendMessage(inputVal);
+    setInputVal("");
+  };
+  if (catalogUnavailable) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-slate-50 p-4">
+        <div className="max-w-md rounded-xl border border-slate-200 bg-white p-6 text-center shadow-lg">
+          <h2 className="text-xl font-bold text-slate-800">Bookings Unavailable</h2>
+          <p className="mt-2 text-sm text-slate-600">
+            Booking is currently unavailable for this merchant. Please visit us again soon.
+          </p>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="flex h-screen flex-col bg-slate-100">
+      <header className="border-b bg-white px-6 py-4 shadow-sm">
+        <h1 className="text-lg font-semibold text-slate-800">Booking Assistant</h1>
+      </header>
+      <main className="flex-1 overflow-y-auto p-4 space-y-4 max-w-2xl mx-auto w-full">
+        {messages.map((msg) => (
+          <div
+            key={msg.id}
+            className={`flex ${msg.sender === "user" ? "justify-end" : "justify-start"}`}
+          >
+            <div
+              className={`rounded-2xl px-4 py-3 max-w-[85%] text-sm ${
+                msg.sender === "user"
+                  ? "bg-blue-600 text-white"
+                  : "bg-white border border-slate-200 text-slate-800 shadow-sm"
+              }`}
+            >
+              {msg.text}
+            </div>
+          </div>
+        ))}
+        {activeServiceCard && (
+          <ServiceCard
+            service={activeServiceCard}
+            onSelect={() => confirmBooking(activeServiceCard.id)}
+          />
+        )}
+      </main>
+      <footer className="border-t bg-white p-4">
+        <form onSubmit={handleSend} className="max-w-2xl mx-auto flex gap-2">
+          <Input
+            value={inputVal}
+            onChange={(e) => setInputVal(e.target.value)}
+            placeholder="Type your request or reply..."
+            className="flex-1"
+          />
+          <Button type="submit">Send</Button>
+        </form>
+      </footer>
+      {isAwaitingFeedback && <FeedbackModal onSubmit={submitFeedback} />}
+    </div>
+  );
+};
+Staff Dashboard Interface
+frontend/src/pages/StaffDashboardPage.tsx
+TypeScript
+import React, { useState } from "react";
+import { useStaffQueue } from "@/hooks/useStaffQueue";
+import { QueueTable } from "@/components/staff/QueueTable";
+import { DecisionModal } from "@/components/staff/DecisionModal";
+import { FinalizeModal } from "@/components/staff/FinalizeModal";
+import { Button } from "@/components/ui/button";
+export const StaffDashboardPage: React.FC = () => {
+  const { queue, isLoading, acceptBooking, rejectBooking, finalizeBooking } = useStaffQueue();
+  const [selectedBookingId, setSelectedBookingId] = useState<string | null>(null);
+  const [modalType, setModalType] = useState<"decision" | "finalize" | null>(null);
+  return (
+    <div className="min-h-screen bg-slate-50">
+      <header className="border-b bg-white px-8 py-4 shadow-sm flex justify-between items-center">
+        <div>
+          <h1 className="text-xl font-bold text-slate-900">Staff Fulfillment Queue</h1>
+          <p className="text-xs text-slate-500">Offline Processing & Scheduling Desk</p>
+        </div>
+        <Button variant="outline" onClick={() => window.location.reload()}>
+          Refresh Queue
+        </Button>
+      </header>
+      <main className="max-w-7xl mx-auto p-8">
+        <QueueTable
+          items={queue}
+          isLoading={isLoading}
+          onAction={(id, action) => {
+            setSelectedBookingId(id);
+            if (action === "accept") acceptBooking(id);
+            if (action === "reject") setModalType("decision");
+            if (action === "finalize") setModalType("finalize");
+          }}
+        />
+        {modalType === "decision" && selectedBookingId && (
+          <DecisionModal
+            bookingId={selectedBookingId}
+            onClose={() => setModalType(null)}
+            onSubmit={(reason) => {
+              rejectBooking(selectedBookingId, reason);
+              setModalType(null);
+            }}
+          />
+        )}
+        {modalType === "finalize" && selectedBookingId && (
+          <FinalizeModal
+            bookingId={selectedBookingId}
+            onClose={() => setModalType(null)}
+            onSubmit={(data) => {
+              finalizeBooking(selectedBookingId, data);
+              setModalType(null);
+            }}
+          />
+        )}
+      </main>
+    </div>
+  );
+};
+6. Container Orchestration & Deployment
+YAML
+services:
+  # Transactional PostgreSQL Relational Store
+  postgres:
+    image: postgres:16-alpine
+    container_name: booking_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-booking_db}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+  # MinIO Object Store (S3-Compatible)
+  minio:
+    image: minio/minio:RELEASE.2024-04-18T19-09-19Z
+    container_name: booking_minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+  # Milvus Engine Dependency: etcd
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.5
+    container_name: booking_etcd
+    restart: unless-stopped
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
+    command:
+      - etcd
+      - -advertise-client-urls=http://127.0.0.1:2379
+      - -listen-client-urls=http://0.0.0.0:2379
+      - -data-dir=/etcd
+    volumes:
+      - etcd_data:/etcd
+  # Milvus Vector Database Standalone
+  milvus:
+    image: milvusdb/milvus:v2.4.4
+    container_name: booking_milvus
+    restart: unless-stopped
+    command: ["milvus", "run", "standalone"]
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+      MINIO_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "19530:19530"
+    volumes:
+      - milvus_data:/var/lib/milvus
+    depends_on:
+      - etcd
+      - minio
+  # FastAPI Backend Service (Using astral-sh/uv inside Docker)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: booking_backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-booking_db}
+      MILVUS_HOST: milvus
+      MILVUS_PORT: "19530"
+      AWS_ENDPOINT_URL: http://minio:9000
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      AWS_REGION: us-east-1
+      S3_BUCKET_NAME: catalog-media
+      SECRET_KEY: ${SECRET_KEY:-insecure_development_secret_key_32_bytes_min}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      milvus:
+        condition: service_started
+      minio:
+        condition: service_healthy
+    volumes:
+      - ./backend/app:/app/app:ro
+  # React 19 / Vite Frontend Service (Node 22 inside Docker)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: booking_frontend
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_BASE_URL=http://localhost:8000/api/v1
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+volumes:
+  postgres_data:
+  minio_data:
+  etcd_data:
+  milvus_data:
+7. Quality Assurance & Verification
+Executing Migrations
+Bash
+docker compose exec backend uv run alembic upgrade head
+Backend Type Safety, Linting & Unit Testing
+Bash
+# Static analysis and style enforcement
+docker compose exec backend uv run ruff check .
+docker compose exec backend uv run ruff format --check .
+# Static type verification
+docker compose exec backend uv run mypy app
+# Pytest execution
+docker compose exec backend uv run pytest -v --cov=app tests/
+Frontend Type Safety, Linting & Unit Testing
+Bash
+# ESLint validation
+docker compose exec frontend npm run lint
+# Strict TypeScript compilation check
+docker compose exec frontend npm run typecheck
+# Vitest test suite
+docker compose exec frontend npm run test
+# Execute build
+docker compose exec frontend npm run build

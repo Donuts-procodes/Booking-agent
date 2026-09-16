@@ -1,0 +1,16 @@
+$kind: http-request
+url: "{{baseUrl}}/api/v1/admin/config/{{merchantId}}"
+method: PATCH
+headers:
+  Content-Type: application/json
+body:
+  type: text
+  content: |-
+    {
+      "llm_provider": "openai",
+      "llm_model_id": "gpt-4o",
+      "api_key": "sk-proj-sample-placeholder",
+      "system_prompt": "You are a courteous, expert service booking concierge.",
+      "agent_greeting": "Hello! Welcome to our salon. How may I assist you with your booking today?"
+    }
+order: 3000

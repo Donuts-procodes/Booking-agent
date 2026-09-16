@@ -1,0 +1,21 @@
+$kind: http-request
+url: "{{baseUrl}}/api/v1/user/bookings/verify"
+method: POST
+headers:
+  Content-Type: application/json
+body:
+  type: text
+  content: |-
+    {
+      "booking_id": "{{bookingId}}",
+      "phone_or_name": "+1234567890"
+    }
+scripts:
+  - type: afterResponse
+    code: |-
+      var jsonData = pm.response.json();
+      if (jsonData.verification_token) {
+          pm.collectionVariables.set('cancellationVerificationToken', jsonData.verification_token);
+      }
+    language: text/javascript
+order: 5000

@@ -1,0 +1,19 @@
+$kind: http-request
+url: "{{baseUrl}}/api/v1/admin/staff?merchant_id={{merchantId}}&name=Sarah Jenkins&email={{staffEmail}}&password={{staffPassword}}"
+method: POST
+headers:
+  Content-Type: application/json
+queryParams:
+  merchant_id: "{{merchantId}}"
+  name: Sarah Jenkins
+  email: "{{staffEmail}}"
+  password: "{{staffPassword}}"
+scripts:
+  - type: beforeRequest
+    code: |-
+      // Use a dynamic email per run so unique constraint never conflicts
+      var dynamicEmail = 'specialist_' + Date.now() + '@example.com';
+      pm.variables.set('staffEmail', dynamicEmail);
+      pm.collectionVariables.set('staffEmail', dynamicEmail);
+    language: text/javascript
+order: 1000

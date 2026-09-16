@@ -1,0 +1,177 @@
+services:
+  # ── Transactional PostgreSQL Relational Store ──
+  postgres:
+    image: postgres:16-alpine
+    container_name: booking_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-booking_db}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── In-Memory Cache & Session Broker (Redis) ──
+  redis:
+    image: redis:7-alpine
+    container_name: booking_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── MinIO Object Store (S3-Compatible) ──
+  minio:
+    image: quay.io/minio/minio:latest
+    container_name: booking_minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── MinIO Bucket Initializer ──
+  minio-init:
+    image: quay.io/minio/mc:latest
+    container_name: booking_minio_init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 $${MINIO_ROOT_USER:-minioadmin} $${MINIO_ROOT_PASSWORD:-minioadmin};
+      mc mb --ignore-existing local/catalog-media;
+      mc anonymous set download local/catalog-media;
+      echo 'Bucket catalog-media initialized';
+      "
+
+  # ── Milvus Engine Dependency: etcd ──
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.5
+    container_name: booking_etcd
+    restart: unless-stopped
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
+    command:
+      - etcd
+      - -advertise-client-urls=http://127.0.0.1:2379
+      - -listen-client-urls=http://0.0.0.0:2379
+      - -data-dir=/etcd
+    volumes:
+      - etcd_data:/etcd
+
+  # ── Milvus Vector Database Standalone ──
+  milvus:
+    image: milvusdb/milvus:v2.4.4
+    container_name: booking_milvus
+    restart: unless-stopped
+    command: ["milvus", "run", "standalone"]
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+      MINIO_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "19530:19530"
+    volumes:
+      - milvus_data:/var/lib/milvus
+    depends_on:
+      - etcd
+      - minio
+
+  # ── FastAPI Backend Service ──
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: booking_backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-booking_db}
+      MILVUS_HOST: milvus
+      MILVUS_PORT: "19530"
+      AWS_ENDPOINT_URL: http://minio:9000
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      AWS_REGION: us-east-1
+      S3_BUCKET_NAME: catalog-media
+      SECRET_KEY: ${SECRET_KEY:-insecure_development_secret_key_32_bytes_min}
+      AES_KEY: ${AES_KEY:-16_32_byte_aes_gcm_encryption_key}
+      MASTER_MERCHANT_ID: ${MASTER_MERCHANT_ID:-00000000-0000-0000-0000-000000000001}
+      ADMIN_PASSKEY: ${ADMIN_PASSKEY:-admin-secret-omnibook-2026}
+      ADMIN_API_KEY: ${ADMIN_API_KEY:-admin-secret-omnibook-2026}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      milvus:
+        condition: service_started
+      minio:
+        condition: service_healthy
+    volumes:
+      - ./backend/app:/app/app
+      - ./backend/migrations:/app/migrations
+      - ./backend/alembic.ini:/app/alembic.ini
+
+  # ── React 19 / Vite Frontend Service ──
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: booking_frontend
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_BASE_URL=http://localhost:8000/api/v1
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+
+  # ── CloudBeaver Web Database UI ──
+  cloudbeaver:
+    image: dbeaver/cloudbeaver:latest
+    container_name: booking_db_ui
+    restart: unless-stopped
+    ports:
+      - "8978:8978"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  etcd_data:
+  milvus_data:

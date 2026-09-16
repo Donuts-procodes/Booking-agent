@@ -1,0 +1,9 @@
+# Use this workspace to collaborate
+workspace:
+  id: 74ef67cc-82e1-430e-9d47-3c41b46f8bad
+
+localResources:
+  collections:
+    - ../OmniBook_API.postman_collection.json
+  specs:
+    - ../service-booking-platform/openapi.json

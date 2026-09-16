@@ -1,0 +1,13 @@
+$kind: http-request
+url: "{{baseUrl}}/api/v1/user/bookings/{{bookingId}}/cancel"
+method: POST
+headers:
+  Content-Type: application/json
+  Authorization: Bearer {{cancellationVerificationToken}}
+body:
+  type: text
+  content: |-
+    {
+      "cancellation_reason": "Schedule conflict"
+    }
+order: 1000

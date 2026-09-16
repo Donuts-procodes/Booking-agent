@@ -1,0 +1,13 @@
+$kind: http-request
+url: "{{baseUrl}}/api/v1/user/bookings/status-check"
+method: POST
+headers:
+  Content-Type: application/json
+body:
+  type: text
+  content: |-
+    {
+      "booking_id": "{{bookingId}}",
+      "phone": "+1234567890"
+    }
+order: 4000

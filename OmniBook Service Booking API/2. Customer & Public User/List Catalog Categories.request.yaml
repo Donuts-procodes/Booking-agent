@@ -1,0 +1,14 @@
+$kind: http-request
+url: "{{baseUrl}}/api/v1/user/catalog?merchant_id={{merchantId}}"
+method: GET
+queryParams:
+  merchant_id: "{{merchantId}}"
+scripts:
+  - type: afterResponse
+    code: |-
+      var jsonData = pm.response.json();
+      if (Array.isArray(jsonData) && jsonData.length > 0) {
+          pm.collectionVariables.set('categoryId', jsonData[0].id);
+      }
+    language: text/javascript
+order: 1000

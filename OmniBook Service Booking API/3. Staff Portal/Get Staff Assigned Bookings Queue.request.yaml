@@ -1,0 +1,8 @@
+$kind: http-request
+url: "{{baseUrl}}/api/v1/staff/bookings?status=pending"
+method: GET
+headers:
+  Authorization: Bearer {{staffToken}}
+queryParams:
+  status: pending
+order: 2000
