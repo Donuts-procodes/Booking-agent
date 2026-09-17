@@ -21,6 +21,7 @@ scripts:
       var jsonData = pm.response.json();
       if (jsonData.booking_id) {
           pm.collectionVariables.set('bookingId', jsonData.booking_id);
+          pm.collectionVariables.set('bookingPathId', encodeURIComponent(jsonData.booking_id));
       }
     language: text/javascript
 order: 3000

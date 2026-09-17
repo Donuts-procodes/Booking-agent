@@ -1,14 +1,17 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { useMerchantConfig } from "../hooks/useMerchantConfig";
+import { useMerchant } from "../context/MerchantContext";
 import { ConfigEditor } from "../components/admin/ConfigEditor";
 import { CatalogUploader } from "../components/admin/CatalogUploader";
 import { KnowledgeUploader } from "../components/admin/KnowledgeUploader";
-import { adminApi } from "../services/adminApi";
+import { CatalogDataViewer } from "../components/admin/CatalogDataViewer";
+import { KnowledgeDataViewer } from "../components/admin/KnowledgeDataViewer";
+import { adminApi, type KnowledgeDoc } from "../services/adminApi";
+import { catalogApi, type CategoryWithServices } from "../services/catalogApi";
 import { Bot, FileSpreadsheet, Database, UserPlus, Sparkles, ShieldCheck, Check, AlertCircle } from "lucide-react";
 
-const DEFAULT_MERCHANT_ID = "00000000-0000-0000-0000-000000000001";
-
 export const MerchantAdminPage: React.FC = () => {
+  const { merchantId, profile } = useMerchant();
   const {
     config,
     saving,
@@ -18,6 +21,52 @@ export const MerchantAdminPage: React.FC = () => {
   } = useMerchantConfig();
 
   const [activeTab, setActiveTab] = useState<"config" | "catalog" | "knowledge" | "staff">("config");
+
+  const [catalogCategories, setCatalogCategories] = useState<CategoryWithServices[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [knowledgeDocs, setKnowledgeDocs] = useState<KnowledgeDoc[]>([]);
+  const [knowledgeLoading, setKnowledgeLoading] = useState(false);
+
+  const fetchCatalogData = useCallback(async () => {
+    setCatalogLoading(true);
+    try {
+      const res = await catalogApi.getCatalogTree(merchantId);
+      setCatalogCategories(res.data);
+    } catch (err) {
+      console.error("Failed to load catalog tree:", err);
+    } finally {
+      setCatalogLoading(false);
+    }
+  }, [merchantId]);
+
+  const fetchKnowledgeDocs = useCallback(async () => {
+    setKnowledgeLoading(true);
+    try {
+      const res = await adminApi.getKnowledgeDocs(merchantId);
+      setKnowledgeDocs(res.data);
+    } catch (err) {
+      console.error("Failed to load knowledge docs:", err);
+    } finally {
+      setKnowledgeLoading(false);
+    }
+  }, [merchantId]);
+
+  useEffect(() => {
+    fetchCatalogData();
+    fetchKnowledgeDocs();
+  }, [fetchCatalogData, fetchKnowledgeDocs]);
+
+  const handleCatalogUpload = async (file: File) => {
+    const res = await uploadCatalog(file);
+    await fetchCatalogData();
+    return res;
+  };
+
+  const handleKnowledgeUpload = async (file: File) => {
+    const res = await uploadKnowledgeDocument(file);
+    await fetchKnowledgeDocs();
+    return res;
+  };
 
   // Staff provisioning state
   const [staffName, setStaffName] = useState("");
@@ -34,7 +83,7 @@ export const MerchantAdminPage: React.FC = () => {
     setStaffError(null);
     try {
       const res = await adminApi.createStaff({
-        merchant_id: DEFAULT_MERCHANT_ID,
+        merchant_id: merchantId,
         name: staffName.trim(),
         email: staffEmail.trim(),
         password: staffPassword.trim(),
@@ -49,6 +98,8 @@ export const MerchantAdminPage: React.FC = () => {
       setProvisioning(false);
     }
   };
+
+  const merchantTitle = profile?.name || "Merchant Control Center";
 
   const tabs = [
     { id: "config", label: "AI & BYOK LLM", icon: Bot, desc: "Provider keys, models, system prompt" },
@@ -66,9 +117,9 @@ export const MerchantAdminPage: React.FC = () => {
             <ShieldCheck className="w-5 h-5" />
           </div>
           <div>
-            <h2 className="text-2xl font-bold text-white tracking-tight">Merchant Control Center</h2>
+            <h2 className="text-2xl font-bold text-white tracking-tight">{merchantTitle}</h2>
             <p className="text-xs text-slate-400 mt-0.5">
-              Merchant ID: <span className="font-mono text-indigo-300">{DEFAULT_MERCHANT_ID}</span>
+              Merchant ID: <span className="font-mono text-indigo-300">{merchantId}</span>
             </p>
           </div>
         </div>
@@ -132,7 +183,12 @@ export const MerchantAdminPage: React.FC = () => {
                 Upload your service list in Excel or CSV format. Categories will be auto-generated and active services made immediately available in the chat agent.
               </p>
             </div>
-            <CatalogUploader onUpload={uploadCatalog} />
+            <CatalogUploader onUpload={handleCatalogUpload} />
+            <CatalogDataViewer
+              categories={catalogCategories}
+              loading={catalogLoading}
+              onRefresh={fetchCatalogData}
+            />
           </div>
         )}
 
@@ -147,7 +203,12 @@ export const MerchantAdminPage: React.FC = () => {
                 Documents are split into 512-token chunks with 10% overlap, converted to dense vector embeddings, and indexed into Milvus for high-accuracy RAG retrieval.
               </p>
             </div>
-            <KnowledgeUploader onUpload={uploadKnowledgeDocument} />
+            <KnowledgeUploader onUpload={handleKnowledgeUpload} />
+            <KnowledgeDataViewer
+              documents={knowledgeDocs}
+              loading={knowledgeLoading}
+              onRefresh={fetchKnowledgeDocs}
+            />
           </div>
         )}
 

@@ -1,5 +1,5 @@
 $kind: http-request
-url: "{{baseUrl}}/api/v1/user/bookings/{{bookingId}}/cancel"
+url: "{{baseUrl}}/api/v1/user/bookings/{{bookingPathId}}/cancel"
 method: POST
 headers:
   Content-Type: application/json

@@ -9,6 +9,14 @@ export interface StaffQueueItem {
   note: string | null;
   status: BookingStatus;
   created_at: string;
+  assigned_staff_id: string | null;
+}
+
+export interface QueueCounts {
+  total: number;
+  pending: number;
+  accepted: number;
+  unassigned: number;
 }
 
 export interface StaffLoginResponse {

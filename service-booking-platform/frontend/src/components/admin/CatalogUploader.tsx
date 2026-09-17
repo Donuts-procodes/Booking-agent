@@ -12,9 +12,34 @@ export const CatalogUploader: React.FC<CatalogUploaderProps> = ({ onUpload }) =>
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const [isDragging, setIsDragging] = useState(false);
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       setFile(e.target.files[0]);
+      setError(null);
+      setResult(null);
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      setFile(e.dataTransfer.files[0]);
       setError(null);
       setResult(null);
     }
@@ -40,25 +65,35 @@ export const CatalogUploader: React.FC<CatalogUploaderProps> = ({ onUpload }) =>
     <div className="space-y-4">
       <div
         onClick={() => fileInputRef.current?.click()}
-        className="border-2 border-dashed border-white/10 hover:border-indigo-500/50 rounded-2xl p-8 text-center cursor-pointer transition-colors bg-white/[0.02] hover:bg-white/[0.04]"
+        onDragOver={handleDragOver}
+        onDragEnter={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        className={`border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-all duration-200 ${
+          isDragging
+            ? "border-indigo-400 bg-indigo-500/10 scale-[1.01]"
+            : "border-white/10 hover:border-indigo-500/50 bg-white/[0.02] hover:bg-white/[0.04]"
+        }`}
       >
         <input
           ref={fileInputRef}
           type="file"
-          accept=".xlsx,.csv"
+          accept=".xlsx,.xls,.csv"
           onChange={handleFileChange}
           className="hidden"
         />
-        <div className="w-12 h-12 rounded-xl bg-indigo-500/10 text-indigo-400 flex items-center justify-center mx-auto mb-3">
+        <div className={`w-12 h-12 rounded-xl flex items-center justify-center mx-auto mb-3 transition-colors ${
+          isDragging ? "bg-indigo-500/20 text-indigo-300" : "bg-indigo-500/10 text-indigo-400"
+        }`}>
           <FileSpreadsheet className="w-6 h-6" />
         </div>
         <p className="text-sm font-semibold text-white">
-          {file ? file.name : "Click or drag & drop service catalog spreadsheet"}
+          {file ? file.name : isDragging ? "Drop spreadsheet here..." : "Click or drag & drop service catalog spreadsheet"}
         </p>
         <p className="text-xs text-slate-400 mt-1">
-          Supports .xlsx or .csv. Required columns: <code className="text-indigo-300 font-mono">name</code>,{" "}
-          <code className="text-indigo-300 font-mono">category</code>, <code className="text-indigo-300 font-mono">description</code>,{" "}
-          <code className="text-indigo-300 font-mono">price_range</code>.
+          Supports .xlsx, .xls, or .csv. Auto-maps columns: <code className="text-indigo-300 font-mono">model / name</code>,{" "}
+          <code className="text-indigo-300 font-mono">brand / type</code>, <code className="text-indigo-300 font-mono">description</code>,{" "}
+          <code className="text-indigo-300 font-mono">price / price_range</code>.
         </p>
       </div>
 

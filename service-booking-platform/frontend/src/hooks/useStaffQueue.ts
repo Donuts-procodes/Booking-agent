@@ -1,13 +1,15 @@
 import { useState, useEffect, useCallback } from "react";
 import { staffApi } from "../services/staffApi";
-import type { StaffQueueItem } from "../types/staff.types";
+import type { StaffQueueItem, QueueCounts } from "../types/staff.types";
 
 export function useStaffQueue() {
   const [token, setToken] = useState<string | null>(() => localStorage.getItem("staff_token"));
   const [staffName, setStaffName] = useState<string | null>(() => localStorage.getItem("staff_name"));
   const [queue, setQueue] = useState<StaffQueueItem[]>([]);
+  const [counts, setCounts] = useState<QueueCounts>({ total: 0, pending: 0, accepted: 0, unassigned: 0 });
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [searchTerm, setSearchTerm] = useState("");
 
   const login = async (email: string, pass: string) => {
     setLoading(true);
@@ -32,15 +34,30 @@ export function useStaffQueue() {
     setToken(null);
     setStaffName(null);
     setQueue([]);
+    setCounts({ total: 0, pending: 0, accepted: 0, unassigned: 0 });
   };
 
-  const fetchQueue = useCallback(async () => {
+  const fetchQueue = useCallback(async (search?: string) => {
     if (!token) return;
     setLoading(true);
     try {
-      const res = await staffApi.getQueue();
-      setQueue(res.data);
+      const queueRes = await staffApi.getQueue(undefined, search || searchTerm || undefined);
+      setQueue(queueRes.data);
       setError(null);
+
+      // Counts endpoint is optional — silently fallback to local computation
+      try {
+        const countsRes = await staffApi.getCounts();
+        setCounts(countsRes.data);
+      } catch {
+        const items = queueRes.data;
+        setCounts({
+          total: items.length,
+          pending: items.filter((i) => i.status === "pending").length,
+          accepted: items.filter((i) => i.status === "accepted").length,
+          unassigned: items.filter((i) => !i.assigned_staff_id).length,
+        });
+      }
     } catch (err: any) {
       if (err?.response?.status === 401) {
         logout();
@@ -50,12 +67,12 @@ export function useStaffQueue() {
     } finally {
       setLoading(false);
     }
-  }, [token]);
+  }, [token, searchTerm]);
 
   useEffect(() => {
     if (token) {
       fetchQueue();
-      const timer = setInterval(fetchQueue, 10000);
+      const timer = setInterval(() => fetchQueue(), 10000);
       return () => clearInterval(timer);
     }
   }, [token, fetchQueue]);
@@ -66,6 +83,16 @@ export function useStaffQueue() {
       await fetchQueue();
     } catch (err: any) {
       setError(err?.response?.data?.detail || "Failed to update booking status.");
+      throw err;
+    }
+  };
+
+  const claimBooking = async (bookingId: string) => {
+    try {
+      await staffApi.claimBooking(bookingId);
+      await fetchQueue();
+    } catch (err: any) {
+      setError(err?.response?.data?.detail || "Failed to claim booking.");
       throw err;
     }
   };
@@ -88,12 +115,16 @@ export function useStaffQueue() {
     token,
     staffName,
     queue,
+    counts,
     loading,
     error,
+    searchTerm,
+    setSearchTerm,
     login,
     logout,
     fetchQueue,
     respondToBooking,
+    claimBooking,
     finalizeBooking,
   };
 }

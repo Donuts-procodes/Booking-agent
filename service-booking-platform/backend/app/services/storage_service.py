@@ -34,16 +34,50 @@ class StorageService:
         return self._build_url(object_key)
 
     # Uploads business knowledge document bytes (PDF/DOCX/TXT) to MinIO/S3 bucket
-    def upload_knowledge_doc(self, merchant_id: uuid.UUID, file_bytes: bytes, filename: str) -> str:
-        """Uploads a raw knowledge document (PDF/DOCX) and returns the S3 URL."""
+    def upload_knowledge_doc(self, merchant_id: uuid.UUID, file_bytes: bytes, filename: str) -> dict[str, str | int]:
+        """Uploads a raw knowledge document (PDF/DOCX) and returns object details."""
         ext = filename.rsplit(".", 1)[-1] if "." in filename else "bin"
         object_key = f"merchants/{merchant_id}/knowledge/{uuid.uuid4()}.{ext}"
         self._client.put_object(
             Bucket=self._bucket,
             Key=object_key,
             Body=file_bytes,
+            Metadata={"original-filename": filename},
         )
-        return self._build_url(object_key)
+        return {
+            "key": object_key,
+            "filename": filename,
+            "size": len(file_bytes),
+            "url": self._build_url(object_key),
+        }
+
+    # Lists all ingested knowledge documents for a merchant from MinIO/S3
+    def list_knowledge_docs(self, merchant_id: uuid.UUID) -> list[dict[str, str | int]]:
+        """Lists stored knowledge documents for a specific merchant."""
+        prefix = f"merchants/{merchant_id}/knowledge/"
+        response = self._client.list_objects_v2(Bucket=self._bucket, Prefix=prefix)
+        items: list[dict[str, str | int]] = []
+        for obj in response.get("Contents", []):
+            key = obj["Key"]
+            if key == prefix:
+                continue
+            filename = key.split("/")[-1]
+            try:
+                head = self._client.head_object(Bucket=self._bucket, Key=key)
+                meta = head.get("Metadata", {})
+                if "original-filename" in meta:
+                    filename = meta["original-filename"]
+            except Exception:
+                pass
+
+            items.append({
+                "key": key,
+                "filename": filename,
+                "size": obj.get("Size", 0),
+                "last_modified": obj["LastModified"].isoformat() if "LastModified" in obj else "",
+                "url": self._build_url(key),
+            })
+        return items
 
     # Constructs public or endpoint URL for stored object key
     def _build_url(self, key: str) -> str:
@@ -53,3 +87,4 @@ class StorageService:
 
 
 storage_service = StorageService()
+

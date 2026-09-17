@@ -1,4 +1,4 @@
-# OmniBook: Universal Service Booking Platform
+# Booking Agent: Universal Service Booking Platform
 
 An enterprise-grade, full-stack AI conversational service booking platform powered by **FastAPI**, **Milvus Vector DB**, **PostgreSQL**, **MinIO/S3**, and **React (Vite + TypeScript)** with Bring-Your-Own-Key (BYOK) multi-LLM orchestration.
 
@@ -55,6 +55,7 @@ docker-compose up -d --build
 ```
 
 Services will be live at:
+
 - **Frontend Application**: [http://localhost:3000](http://localhost:3000)
 - **FastAPI Documentation**: [http://localhost:8000/docs](http://localhost:8000/docs)
 - **MinIO Console**: [http://localhost:9001](http://localhost:9001)
@@ -114,11 +115,14 @@ npm run dev -- --port 3000
 ## 🧪 Testing
 
 Run the automated backend test suite:
+
 ```bash
 cd backend
 python -m pytest tests/ -v
 ```
+
 Run frontend TypeScript type checking:
+
 ```bash
 cd frontend
 npx tsc --noEmit

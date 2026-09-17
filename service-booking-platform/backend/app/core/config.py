@@ -28,8 +28,8 @@ class Settings(BaseSettings):
     # Cryptography & Ephemeral Tokens
     SECRET_KEY: str = Field(default="production-insecure-change-key-min-32-chars-long")
     AES_KEY: str = Field(default="16_32_byte_aes_gcm_encryption_key")
-    ADMIN_API_KEY: str = Field(default="admin-secret-omnibook-2026")
-    ADMIN_PASSKEY: str = Field(default="admin-secret-omnibook-2026")
+    ADMIN_API_KEY: str = Field(default="admin-secret-Booking Agent-2026")
+    ADMIN_PASSKEY: str = Field(default="admin-secret-Booking Agent-2026")
     MASTER_MERCHANT_ID: str = Field(default="00000000-0000-0000-0000-000000000001")
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRATION_MINUTES: int = 15

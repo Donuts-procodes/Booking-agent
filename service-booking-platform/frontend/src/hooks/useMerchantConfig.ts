@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback } from "react";
 import { adminApi } from "../services/adminApi";
+import { useMerchant } from "../context/MerchantContext";
 import type { AgentConfig } from "../types/config.types";
 
-const DEFAULT_MERCHANT_ID = "00000000-0000-0000-0000-000000000001";
-
 export function useMerchantConfig() {
+  const { merchantId } = useMerchant();
   const [config, setConfig] = useState<AgentConfig | null>(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -13,7 +13,7 @@ export function useMerchantConfig() {
   const fetchConfig = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await adminApi.getConfig(DEFAULT_MERCHANT_ID);
+      const res = await adminApi.getConfig(merchantId);
       setConfig(res.data);
     } catch {
       setConfig({
@@ -26,7 +26,7 @@ export function useMerchantConfig() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [merchantId]);
 
   useEffect(() => {
     fetchConfig();
@@ -36,7 +36,7 @@ export function useMerchantConfig() {
     setSaving(true);
     setStatusMessage(null);
     try {
-      await adminApi.updateConfig(DEFAULT_MERCHANT_ID, data);
+      await adminApi.updateConfig(merchantId, data);
       await fetchConfig();
       setStatusMessage({ type: "success", text: "Configuration saved securely." });
     } catch (err: any) {
@@ -54,7 +54,7 @@ export function useMerchantConfig() {
     setSaving(true);
     setStatusMessage(null);
     try {
-      const res = await adminApi.uploadCatalog(DEFAULT_MERCHANT_ID, file);
+      const res = await adminApi.uploadCatalog(merchantId, file);
       setStatusMessage({
         type: "success",
         text: `Catalog processed successfully! Created ${res.data.services_created} services across categories.`,
@@ -75,7 +75,7 @@ export function useMerchantConfig() {
     setSaving(true);
     setStatusMessage(null);
     try {
-      const res = await adminApi.uploadKnowledgeDoc(DEFAULT_MERCHANT_ID, file);
+      const res = await adminApi.uploadKnowledgeDoc(merchantId, file);
       setStatusMessage({
         type: "success",
         text: `Knowledge document uploaded and queued for vector embedding: ${file.name}`,

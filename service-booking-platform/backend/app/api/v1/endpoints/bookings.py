@@ -26,18 +26,18 @@ router = APIRouter()
 
 # Creates a new customer booking, assigns specialist via router, and logs the created reservation ID
 @router.post("", response_model=BookingResponse, status_code=status.HTTP_201_CREATED)
-async def create_booking(payload: BookingCreate, db: AsyncSession = Depends(get_db)):
+async def create_booking(payload: BookingCreate, db: AsyncSession = Depends(get_db)) -> BookingResponse:
     """Creates a booking record with status 'pending' and routes to assigned staff."""
-    logger.info("Initiating booking creation: merchant=%s, service=%s", payload.merchant_id, payload.service_id)
+    logger.info("[PIPELINE] Ingesting customer booking: merchant=%s, service=%s, customer=%s", payload.merchant_id, payload.service_id, payload.customer_name)
     service = await db.get(Service, payload.service_id)
     if not service or not service.is_active:
-        logger.warning("Booking failed: service=%s not found or inactive", payload.service_id)
+        logger.warning("[PIPELINE] Booking rejected: service=%s not found or inactive", payload.service_id)
         raise HTTPException(status_code=404, detail="Service not found or currently inactive")
 
-    assigned_staff_id = await assign_staff_round_robin(db, service.id)
+    assigned_staff_id = await assign_staff_round_robin(db, service.id, payload.merchant_id)
     booking = await create_booking_record(db=db, service=service, assigned_staff_id=assigned_staff_id, payload=payload)
     logger.info(
-        "Booking created: booking_id=%s, customer=%s, assigned_staff=%s",
+        "[AGENT_OUT] Booking finalized: ID=%s, customer=%s, assigned_staff=%s",
         booking.id,
         booking.customer_name,
         booking.staff_id,
@@ -53,7 +53,7 @@ async def create_booking(payload: BookingCreate, db: AsyncSession = Depends(get_
 
 # Checks booking status by verified customer phone and logs status query
 @router.post("/status-check", response_model=StatusCheckResponse)
-async def check_booking_status(payload: StatusCheckRequest, db: AsyncSession = Depends(get_db)):
+async def check_booking_status(payload: StatusCheckRequest, db: AsyncSession = Depends(get_db)) -> StatusCheckResponse:
     """Verifies phone number against the booking ID and returns the real-time status."""
     logger.info("Status check requested for booking_id=%s", payload.booking_id)
     stmt = (
@@ -79,7 +79,7 @@ async def check_booking_status(payload: StatusCheckRequest, db: AsyncSession = D
 
 # Validates booking ownership, verifies eligibility, issues 15-minute token, and logs verification attempt
 @router.post("/verify", response_model=VerifyCancellationResponse)
-async def verify_cancellation_eligibility(payload: VerifyCancellationRequest, db: AsyncSession = Depends(get_db)):
+async def verify_cancellation_eligibility(payload: VerifyCancellationRequest, db: AsyncSession = Depends(get_db)) -> VerifyCancellationResponse:
     """Validates booking ownership and terminal status for cancellations."""
     logger.info("Cancellation verification requested for booking_id=%s", payload.booking_id)
     booking = await get_verified_booking(db, payload.booking_id, payload.phone_or_name)
@@ -125,7 +125,7 @@ async def execute_cancellation(
     payload: CancelExecutionRequest,
     authorization: str = Header(...),
     db: AsyncSession = Depends(get_db),
-):
+) -> dict[str, str]:
     """Cancels the reservation upon explicit user confirmation."""
     logger.info("Executing cancellation for booking_id=%s", booking_id)
     token = authorization.replace("Bearer ", "").strip()

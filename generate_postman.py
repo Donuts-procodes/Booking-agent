@@ -4,9 +4,9 @@ import uuid
 def generate():
     collection = {
         "info": {
-            "_postman_id": "omnibook-service-booking-api-v1",
-            "name": "OmniBook Service Booking API",
-            "description": "Autonomous end-to-end collection for OmniBook Universal Service Booking Assistant.",
+            "_postman_id": "Booking Agent-service-booking-api-v1",
+            "name": "Booking Agent Service Booking API",
+            "description": "Autonomous end-to-end collection for Booking Agent Universal Service Booking Assistant.",
             "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
         },
         "variable": [
@@ -18,6 +18,7 @@ def generate():
             {"key": "staffPassword", "value": "SpecialistSecurePass123!", "type": "string"},
             {"key": "staffToken", "value": "", "type": "string"},
             {"key": "bookingId", "value": "", "type": "string"},
+            {"key": "bookingPathId", "value": "", "type": "string"},
             {"key": "cancellationVerificationToken", "value": "", "type": "string"}
         ],
         "item": [
@@ -158,6 +159,7 @@ def generate():
                                         "var jsonData = pm.response.json();",
                                         "if (jsonData.booking_id) {",
                                         "    pm.collectionVariables.set('bookingId', jsonData.booking_id);",
+                                        "    pm.collectionVariables.set('bookingPathId', encodeURIComponent(jsonData.booking_id));",
                                         "}"
                                     ],
                                     "type": "text/javascript"
@@ -327,9 +329,9 @@ def generate():
                                 }, indent=2)
                             },
                             "url": {
-                                "raw": "{{baseUrl}}/api/v1/staff/bookings/{{bookingId}}/decision",
+                                "raw": "{{baseUrl}}/api/v1/staff/bookings/{{bookingPathId}}/decision",
                                 "host": ["{{baseUrl}}"],
-                                "path": ["api", "v1", "staff", "bookings", "{{bookingId}}", "decision"]
+                                "path": ["api", "v1", "staff", "bookings", "{{bookingPathId}}", "decision"]
                             }
                         }
                     },
@@ -350,9 +352,9 @@ def generate():
                                 }, indent=2)
                             },
                             "url": {
-                                "raw": "{{baseUrl}}/api/v1/staff/bookings/{{bookingId}}/finalize",
+                                "raw": "{{baseUrl}}/api/v1/staff/bookings/{{bookingPathId}}/finalize",
                                 "host": ["{{baseUrl}}"],
-                                "path": ["api", "v1", "staff", "bookings", "{{bookingId}}", "finalize"]
+                                "path": ["api", "v1", "staff", "bookings", "{{bookingPathId}}", "finalize"]
                             }
                         }
                     }
@@ -376,9 +378,9 @@ def generate():
                                 }, indent=2)
                             },
                             "url": {
-                                "raw": "{{baseUrl}}/api/v1/user/bookings/{{bookingId}}/cancel",
+                                "raw": "{{baseUrl}}/api/v1/user/bookings/{{bookingPathId}}/cancel",
                                 "host": ["{{baseUrl}}"],
-                                "path": ["api", "v1", "user", "bookings", "{{bookingId}}", "cancel"]
+                                "path": ["api", "v1", "user", "bookings", "{{bookingPathId}}", "cancel"]
                             }
                         }
                     }
@@ -387,15 +389,15 @@ def generate():
         ]
     }
 
-    output_path = "c:/Users/DELL/work/booking agent/OmniBook_API.postman_collection.json"
-    with open(output_path, "w") as f:
+    output_path = "c:/Users/DELL/work/booking agent/Booking Agent_API.postman_collection.json"
+    with open(output_path, "w", encoding="utf-8") as f:
         json.dump(collection, f, indent=2)
-    print("OmniBook_API.postman_collection.json updated successfully!")
+    print("Booking Agent_API.postman_collection.json updated successfully!")
 
     import subprocess
     import shutil
     from pathlib import Path
-    target_dir = Path("c:/Users/DELL/work/booking agent/OmniBook Service Booking API")
+    target_dir = Path("c:/Users/DELL/work/booking agent/Booking Agent Service Booking API")
     if target_dir.exists():
         shutil.rmtree(target_dir)
 

@@ -12,9 +12,34 @@ export const KnowledgeUploader: React.FC<KnowledgeUploaderProps> = ({ onUpload }
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const [isDragging, setIsDragging] = useState(false);
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       setFile(e.target.files[0]);
+      setError(null);
+      setResult(null);
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      setFile(e.dataTransfer.files[0]);
       setError(null);
       setResult(null);
     }
@@ -40,23 +65,33 @@ export const KnowledgeUploader: React.FC<KnowledgeUploaderProps> = ({ onUpload }
     <div className="space-y-4">
       <div
         onClick={() => fileInputRef.current?.click()}
-        className="border-2 border-dashed border-white/10 hover:border-purple-500/50 rounded-2xl p-8 text-center cursor-pointer transition-colors bg-white/[0.02] hover:bg-white/[0.04]"
+        onDragOver={handleDragOver}
+        onDragEnter={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        className={`border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-all duration-200 ${
+          isDragging
+            ? "border-purple-400 bg-purple-500/10 scale-[1.01]"
+            : "border-white/10 hover:border-purple-500/50 bg-white/[0.02] hover:bg-white/[0.04]"
+        }`}
       >
         <input
           ref={fileInputRef}
           type="file"
-          accept=".pdf,.docx,.txt"
+          accept=".pdf,.docx,.txt,.md"
           onChange={handleFileChange}
           className="hidden"
         />
-        <div className="w-12 h-12 rounded-xl bg-purple-500/10 text-purple-400 flex items-center justify-center mx-auto mb-3">
+        <div className={`w-12 h-12 rounded-xl flex items-center justify-center mx-auto mb-3 transition-colors ${
+          isDragging ? "bg-purple-500/20 text-purple-300" : "bg-purple-500/10 text-purple-400"
+        }`}>
           <Database className="w-6 h-6" />
         </div>
         <p className="text-sm font-semibold text-white">
-          {file ? file.name : "Upload business policies, FAQs, or service brochures"}
+          {file ? file.name : isDragging ? "Drop document here..." : "Upload business policies, FAQs, or service brochures"}
         </p>
         <p className="text-xs text-slate-400 mt-1">
-          Supports .pdf, .docx, and .txt. Documents are chunked (512 tokens) and indexed into Milvus vector store for RAG answers.
+          Supports .pdf, .docx, .txt, and .md. Documents are chunked (512 tokens) and indexed into Milvus vector store for RAG answers.
         </p>
       </div>
 

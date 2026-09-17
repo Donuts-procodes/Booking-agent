@@ -1,33 +1,35 @@
-import React, { useState } from "react";
+import React, { useState, useCallback } from "react";
 import { useStaffQueue } from "../hooks/useStaffQueue";
 import { QueueCard } from "../components/staff/QueueCard";
 import { FinalizeModal } from "../components/staff/FinalizeModal";
-import { Users, LogIn, LogOut, RefreshCw, AlertCircle, Inbox, Lock, Mail } from "lucide-react";
+import { Users, LogIn, LogOut, RefreshCw, AlertCircle, Inbox, Lock, Mail, Search } from "lucide-react";
+
+type FilterTab = "all" | "pending" | "accepted" | "unassigned";
 
 export const StaffDashboardPage: React.FC = () => {
   const {
     token,
     staffName,
     queue,
+    counts,
     loading,
     error,
+    searchTerm,
+    setSearchTerm,
     login,
     logout,
     fetchQueue,
     respondToBooking,
+    claimBooking,
     finalizeBooking,
   } = useStaffQueue();
 
-  // Login form state
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loginLoading, setLoginLoading] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
 
-  // Filter state
-  const [filter, setFilter] = useState<"all" | "pending" | "accepted">("all");
-
-  // Finalize modal state
+  const [filter, setFilter] = useState<FilterTab>("all");
   const [finalizeBookingId, setFinalizeBookingId] = useState<string | null>(null);
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -43,10 +45,27 @@ export const StaffDashboardPage: React.FC = () => {
     }
   };
 
+  const handleSearch = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setSearchTerm(e.target.value);
+  }, [setSearchTerm]);
+
+  const handleSearchSubmit = useCallback((e: React.FormEvent) => {
+    e.preventDefault();
+    fetchQueue(searchTerm);
+  }, [fetchQueue, searchTerm]);
+
   const filteredQueue = queue.filter((item) => {
     if (filter === "all") return true;
+    if (filter === "unassigned") return !item.assigned_staff_id;
     return item.status === filter;
   });
+
+  const tabConfig: { id: FilterTab; label: string; count: number }[] = [
+    { id: "all", label: "All", count: counts.total },
+    { id: "pending", label: "Pending", count: counts.pending },
+    { id: "accepted", label: "Accepted", count: counts.accepted },
+    { id: "unassigned", label: "Unassigned", count: counts.unassigned },
+  ];
 
   if (!token) {
     return (
@@ -149,6 +168,20 @@ export const StaffDashboardPage: React.FC = () => {
         </div>
       </div>
 
+      {/* Search bar */}
+      <form onSubmit={handleSearchSubmit} className="my-4">
+        <div className="relative">
+          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+          <input
+            type="text"
+            placeholder="Search by customer name, phone, booking ID, or service..."
+            value={searchTerm}
+            onChange={handleSearch}
+            className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/20"
+          />
+        </div>
+      </form>
+
       {/* Error notification */}
       {error && (
         <div className="my-4 p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs flex items-center gap-2">
@@ -157,28 +190,22 @@ export const StaffDashboardPage: React.FC = () => {
         </div>
       )}
 
-      {/* Filter Tabs */}
-      <div className="flex items-center gap-2 my-6">
-        {(["all", "pending", "accepted"] as const).map((tab) => {
-          const count =
-            tab === "all"
-              ? queue.length
-              : queue.filter((i) => i.status === tab).length;
-          return (
-            <button
-              key={tab}
-              type="button"
-              onClick={() => setFilter(tab)}
-              className={`px-4 py-2 rounded-xl text-xs font-semibold cursor-pointer transition-all ${
-                filter === tab
-                  ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/30"
-                  : "bg-white/5 text-slate-400 hover:text-white hover:bg-white/10"
-              }`}
-            >
-              {tab.charAt(0).toUpperCase() + tab.slice(1)} ({count})
-            </button>
-          );
-        })}
+      {/* Filter Tabs with dynamic counts */}
+      <div className="flex items-center gap-2 my-6 flex-wrap">
+        {tabConfig.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => setFilter(tab.id)}
+            className={`px-4 py-2 rounded-xl text-xs font-semibold cursor-pointer transition-all ${
+              filter === tab.id
+                ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/30"
+                : "bg-white/5 text-slate-400 hover:text-white hover:bg-white/10"
+            }`}
+          >
+            {tab.label} ({tab.count})
+          </button>
+        ))}
       </div>
 
       {/* Queue items list */}
@@ -189,7 +216,7 @@ export const StaffDashboardPage: React.FC = () => {
           </div>
           <h4 className="text-base font-semibold text-white">Queue is clear</h4>
           <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
-            No booking requests currently assigned matching your filter. Incoming bookings assigned by the least-loaded router will appear here.
+            No booking requests currently matching your filter. Incoming bookings assigned by the least-loaded router will appear here.
           </p>
         </div>
       ) : (
@@ -203,6 +230,9 @@ export const StaffDashboardPage: React.FC = () => {
               }}
               onReject={async (id, reason) => {
                 await respondToBooking(id, "reject", reason);
+              }}
+              onClaim={async (id) => {
+                await claimBooking(id);
               }}
               onOpenFinalize={(id) => setFinalizeBookingId(id)}
             />

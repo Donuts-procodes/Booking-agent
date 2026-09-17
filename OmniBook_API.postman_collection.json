@@ -1,8 +1,8 @@
 {
   "info": {
-    "_postman_id": "omnibook-service-booking-api-v1",
-    "name": "OmniBook Service Booking API",
-    "description": "Autonomous end-to-end collection for OmniBook Universal Service Booking Assistant.",
+    "_postman_id": "Booking Agent-service-booking-api-v1",
+    "name": "Booking Agent Service Booking API",
+    "description": "Autonomous end-to-end collection for Booking Agent Universal Service Booking Assistant.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -43,6 +43,11 @@
     },
     {
       "key": "bookingId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "bookingPathId",
       "value": "",
       "type": "string"
     },
@@ -250,6 +255,7 @@
                   "var jsonData = pm.response.json();",
                   "if (jsonData.booking_id) {",
                   "    pm.collectionVariables.set('bookingId', jsonData.booking_id);",
+                  "    pm.collectionVariables.set('bookingPathId', encodeURIComponent(jsonData.booking_id));",
                   "}"
                 ],
                 "type": "text/javascript"
@@ -480,7 +486,7 @@
               "raw": "{\n  \"action\": \"accept\",\n  \"reason\": \"Available for customer appointment\"\n}"
             },
             "url": {
-              "raw": "{{baseUrl}}/api/v1/staff/bookings/{{bookingId}}/decision",
+              "raw": "{{baseUrl}}/api/v1/staff/bookings/{{bookingPathId}}/decision",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -489,7 +495,7 @@
                 "v1",
                 "staff",
                 "bookings",
-                "{{bookingId}}",
+                "{{bookingPathId}}",
                 "decision"
               ]
             }
@@ -514,7 +520,7 @@
               "raw": "{\n  \"scheduled_date\": \"2026-09-20 14:00:00\",\n  \"payment_status\": \"paid\",\n  \"notes\": \"Appointment finalized with customer via phone\"\n}"
             },
             "url": {
-              "raw": "{{baseUrl}}/api/v1/staff/bookings/{{bookingId}}/finalize",
+              "raw": "{{baseUrl}}/api/v1/staff/bookings/{{bookingPathId}}/finalize",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -523,7 +529,7 @@
                 "v1",
                 "staff",
                 "bookings",
-                "{{bookingId}}",
+                "{{bookingPathId}}",
                 "finalize"
               ]
             }
@@ -553,7 +559,7 @@
               "raw": "{\n  \"cancellation_reason\": \"Schedule conflict\"\n}"
             },
             "url": {
-              "raw": "{{baseUrl}}/api/v1/user/bookings/{{bookingId}}/cancel",
+              "raw": "{{baseUrl}}/api/v1/user/bookings/{{bookingPathId}}/cancel",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -562,7 +568,7 @@
                 "v1",
                 "user",
                 "bookings",
-                "{{bookingId}}",
+                "{{bookingPathId}}",
                 "cancel"
               ]
             }

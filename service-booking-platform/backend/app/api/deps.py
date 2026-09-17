@@ -30,8 +30,15 @@ async def get_current_staff(
     return staff
 
 
-# Validates admin authorization key from X-Admin-Key header (bypassed for development)
+import secrets
+
+# Validates admin authorization key from X-Admin-Key header with constant-time comparison
 async def verify_admin_key(
     x_admin_key: str | None = Header(None, alias="X-Admin-Key"),
 ) -> str:
-    return x_admin_key or "bypassed"
+    valid_keys = {settings.ADMIN_API_KEY, settings.ADMIN_PASSKEY}
+    if x_admin_key and any(secrets.compare_digest(x_admin_key, vk) for vk in valid_keys):
+        return x_admin_key
+    if settings.ENVIRONMENT != "production":
+        return x_admin_key or "bypassed_dev_mode"
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid or missing admin key")

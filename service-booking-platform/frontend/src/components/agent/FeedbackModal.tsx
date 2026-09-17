@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Star, MessageSquareCheck, X } from "lucide-react";
 import apiClient from "../../services/apiClient";
+import { useMerchant } from "../../context/MerchantContext";
 
 interface FeedbackModalProps {
   isOpen: boolean;
@@ -9,14 +10,13 @@ interface FeedbackModalProps {
   onSubmitSuccess: () => void;
 }
 
-const DEFAULT_MERCHANT_ID = "00000000-0000-0000-0000-000000000001";
-
 export const FeedbackModal: React.FC<FeedbackModalProps> = ({
   isOpen,
   bookingId,
   onClose,
   onSubmitSuccess,
 }) => {
+  const { merchantId } = useMerchant();
   const [rating, setRating] = useState<number>(5);
   const [hoveredRating, setHoveredRating] = useState<number | null>(null);
   const [comment, setComment] = useState("");
@@ -29,7 +29,7 @@ export const FeedbackModal: React.FC<FeedbackModalProps> = ({
     setLoading(true);
     try {
       await apiClient.post("/feedback", {
-        merchant_id: DEFAULT_MERCHANT_ID,
+        merchant_id: merchantId,
         booking_id: bookingId || undefined,
         rating,
         comment: comment.trim() || undefined,

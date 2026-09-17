@@ -33,5 +33,6 @@ class StaffQueueItemResponse(BaseModel):
     note: str | None
     status: str
     created_at: datetime
+    assigned_staff_id: str | None = None
 
     model_config = ConfigDict(from_attributes=True)

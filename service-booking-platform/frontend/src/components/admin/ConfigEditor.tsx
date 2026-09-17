@@ -59,11 +59,13 @@ export const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, onSave, savi
       { id: "claude-mythos-5.1", label: "Claude Mythos 5.1 (High Assurance)", desc: "Specialized tier tailored for high-security environments" },
     ],
     gemini: [
+      { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash (Recommended Workhorse)", desc: "Ultra-fast response time, cost-efficient multimodal conversational reasoning" },
+      { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro (Deep Reasoning)", desc: "Advanced reasoning for complex multi-turn service scheduling" },
+      { id: "gemini-1.5-flash", label: "Gemini 1.5 Flash (Legacy Fast)", desc: "High throughput lightweight assistant" },
       { id: "gemini-3.1-pro", label: "Gemini 3.1 Pro (Heavyweight Frontier)", desc: "Deep multimodal reasoning across text, code, audio, and video" },
       { id: "gemini-3.8-flash", label: "Gemini 3.8 Flash (Multimodal Workhorse)", desc: "Fast time-to-first-token with robust tool calling" },
-      { id: "gemini-3.5-flash-lite", label: "Gemini 3.5 Flash-Lite (Edge & High Throughput)", desc: "Ultra-fast classification and low-latency edge serving" },
-      { id: "gemini-extended-thinking", label: "Gemini Extended Thinking (Test-Time Compute)", desc: "Deliberative search for dense analytical and coding problems" },
     ],
+
     deepseek: [
       { id: "deepseek-r1", label: "DeepSeek-R1 (Frontier Reasoning)", desc: "Trained via large-scale RL with transparent reasoning traces" },
       { id: "deepseek-v3", label: "DeepSeek-V3 (671B MoE Foundation)", desc: "High-capacity MoE model for general text, JSON, and code" },

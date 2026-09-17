@@ -1,11 +1,12 @@
 import React, { useState } from "react";
 import type { StaffQueueItem } from "../../types/staff.types";
-import { User, Phone, Mail, FileText, Check, X, CheckCircle, Clock } from "lucide-react";
+import { User, Phone, Mail, FileText, Check, X, CheckCircle, Clock, Hand } from "lucide-react";
 
 interface QueueCardProps {
   item: StaffQueueItem;
   onAccept: (bookingId: string) => Promise<void>;
   onReject: (bookingId: string, reason: string) => Promise<void>;
+  onClaim?: (bookingId: string) => Promise<void>;
   onOpenFinalize: (bookingId: string) => void;
 }
 
@@ -13,11 +14,14 @@ export const QueueCard: React.FC<QueueCardProps> = ({
   item,
   onAccept,
   onReject,
+  onClaim,
   onOpenFinalize,
 }) => {
   const [rejecting, setRejecting] = useState(false);
   const [reason, setReason] = useState("");
   const [loading, setLoading] = useState(false);
+
+  const isUnassigned = !item.assigned_staff_id;
 
   const handleReject = async () => {
     if (!reason.trim()) return;
@@ -25,6 +29,16 @@ export const QueueCard: React.FC<QueueCardProps> = ({
     try {
       await onReject(item.booking_id, reason.trim());
       setRejecting(false);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleClaim = async () => {
+    if (!onClaim) return;
+    setLoading(true);
+    try {
+      await onClaim(item.booking_id);
     } finally {
       setLoading(false);
     }
@@ -38,22 +52,28 @@ export const QueueCard: React.FC<QueueCardProps> = ({
   });
 
   return (
-    <div className="glass-panel rounded-2xl p-5 border border-white/10 hover:border-white/20 transition-all shadow-lg">
+    <div className={`glass-panel rounded-2xl p-5 border transition-all shadow-lg ${isUnassigned ? "border-amber-500/30 bg-amber-950/10" : "border-white/10 hover:border-white/20"}`}>
       <div className="flex items-start justify-between gap-4 pb-4 border-b border-white/5">
         <div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <span className="text-xs font-mono font-bold text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded-md border border-indigo-500/20">
               {item.booking_id}
             </span>
-            <span
-              className={`text-xs px-2.5 py-0.5 rounded-full font-medium ${
-                item.status === "accepted"
-                  ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
-                  : "bg-amber-500/10 text-amber-400 border border-amber-500/20"
-              }`}
-            >
-              {item.status.toUpperCase()}
-            </span>
+            {isUnassigned ? (
+              <span className="text-xs px-2.5 py-0.5 rounded-full font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                UNASSIGNED
+              </span>
+            ) : (
+              <span
+                className={`text-xs px-2.5 py-0.5 rounded-full font-medium ${
+                  item.status === "accepted"
+                    ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
+                    : "bg-amber-500/10 text-amber-400 border border-amber-500/20"
+                }`}
+              >
+                {item.status.toUpperCase()}
+              </span>
+            )}
           </div>
           <h4 className="text-base font-bold text-white mt-1.5">{item.service_name}</h4>
         </div>
@@ -94,7 +114,20 @@ export const QueueCard: React.FC<QueueCardProps> = ({
 
       {/* Action triggers */}
       <div className="pt-3 border-t border-white/5 flex items-center justify-between gap-2">
-        {item.status === "pending" && !rejecting && (
+        {/* Claim button for unassigned bookings */}
+        {isUnassigned && onClaim && (
+          <button
+            type="button"
+            onClick={handleClaim}
+            disabled={loading}
+            className="w-full py-2 rounded-xl bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white text-xs font-semibold flex items-center justify-center gap-1.5 shadow-md shadow-amber-600/20 cursor-pointer transition-all disabled:opacity-50"
+          >
+            <Hand className="w-4 h-4" />
+            {loading ? "Claiming..." : "Claim This Booking"}
+          </button>
+        )}
+
+        {!isUnassigned && item.status === "pending" && !rejecting && (
           <>
             <button
               type="button"
@@ -115,7 +148,7 @@ export const QueueCard: React.FC<QueueCardProps> = ({
           </>
         )}
 
-        {item.status === "accepted" && (
+        {!isUnassigned && item.status === "accepted" && (
           <button
             type="button"
             onClick={() => onOpenFinalize(item.booking_id)}

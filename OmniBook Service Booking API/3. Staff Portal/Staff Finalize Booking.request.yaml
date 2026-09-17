@@ -1,5 +1,5 @@
 $kind: http-request
-url: "{{baseUrl}}/api/v1/staff/bookings/{{bookingId}}/finalize"
+url: "{{baseUrl}}/api/v1/staff/bookings/{{bookingPathId}}/finalize"
 method: PATCH
 headers:
   Content-Type: application/json

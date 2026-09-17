@@ -23,7 +23,14 @@ class CategoryRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class CategoryWithServicesRead(CategoryRead):
+    services: list["ServiceRead"] = []
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class ServiceCreate(BaseModel):
+
     category_id: uuid.UUID
     name: str
     description: str

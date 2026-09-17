@@ -12,7 +12,7 @@ export const Navbar: React.FC = () => {
           </div>
           <div>
             <span className="text-lg font-bold tracking-tight text-white block">
-              OmniBook <span className="text-indigo-400 font-medium text-xs px-2 py-0.5 rounded-full bg-indigo-500/10 border border-indigo-500/20">AI Agent</span>
+              Booking Agent <span className="text-indigo-400 font-medium text-xs px-2 py-0.5 rounded-full bg-indigo-500/10 border border-indigo-500/20">AI Agent</span>
             </span>
             <span className="text-xs text-slate-400 block -mt-0.5">Universal Service Concierge</span>
           </div>

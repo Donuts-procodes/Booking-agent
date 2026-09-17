@@ -1,0 +1,111 @@
+flowchart TD
+
+    %% ── TOP: 3 ACTOR ENDPOINTS ──
+    subgraph Actors ["External Actors & Interfaces"]
+        MERCHANT["🏢 Merchant / Admin Portal\n(Uploads, Policies, Inventory)"]
+        USER["👤 Customer / Chat Widget\n(Inquiries, Discovery, Booking)"]
+        STAFF["👨‍💼 Staff / Dispatch Portal\n(Review, Accept/Claim, Execute)"]
+    end
+
+    %% ── CLIENT GATEWAY ──
+    subgraph Gateway ["API Gateway & Event Ingress"]
+        API_ADMIN["Admin API Gateway\nPOST /admin/catalog/upload\nPOST /admin/knowledge-docs"]
+        API_CHAT["User API Gateway\nPOST /user/chat\n(Session Auth & Rate Limit)"]
+        API_STAFF["Staff API Gateway\nGET /staff/queue\nPOST /staff/action"]
+    end
+
+    MERCHANT --> API_ADMIN
+    USER --> API_CHAT
+    STAFF <--> API_STAFF
+
+    %% ── CORE ORCHESTRATOR IN THE MIDDLE ──
+    subgraph Orchestrator ["CORE AGENTIC ORCHESTRATOR (LangGraph / StateGraph Engine)"]
+
+        %% Session & Execution State
+        STATE_MGR["Session & State Manager\n(Short-Term Context & History)"]
+
+        %% Input Guardrail & Intent
+        INTENT_ROUTER{"Intent Router & Guardrails"}
+
+        %% Central Reasoning Engine
+        AGENT_CORE["Agent Reasoning Core\n(Planning, Reflection & Tool Invocation)"]
+
+        %% Multi-Model Provider Hub
+        LLM_HUB{"Multi-LLM Hub\n(Gemini 2.5 Pro / GPT-4o / Groq)"}
+
+        %% Sub-Engines (Tool Suites)
+        subgraph ListingEngine ["1. Listing & Catalog Tool Suite"]
+            T_CATALOG_SEARCH["Tool: Semantic Catalog Search"]
+            T_CATALOG_FILTER["Tool: Hard Facet Filter (Price, Year, Category)"]
+            T_ITEM_DETAILS["Tool: Item Specifications & Stock Lookup"]
+        end
+
+        subgraph BookingEngine ["2. Booking & Reservation Tool Suite"]
+            T_CHECK_AVAIL["Tool: Real-Time Slot Availability"]
+            T_HOLD_SLOT["Tool: Temporary Hold / Lock (Redis TTL)"]
+            T_COMMIT_BOOK["Tool: Stage Confirmed Booking"]
+        end
+
+        subgraph KnowledgeEngine ["3. Knowledge Base Tool Suite"]
+            T_DOC_SEARCH["Tool: Policy & FAQ Vector Retrieval"]
+        end
+
+        subgraph IngestionPipeline ["4. Background Ingestion Worker"]
+            INGEST_Q["Async Queue (Redis / Celery)"]
+            PARSER["Parser, Chunker & Metadata Tagger"]
+            EMBED_ENG["HuggingFace Embedder (all-MiniLM-L6-v2)"]
+        end
+
+        subgraph DispatchEngine ["5. Staff Dispatch & Routing Engine"]
+            DISPATCH_RULE["Skill Match & Load Balancer"]
+            TICKET_DISPATCH["Live Ticket Queue & Webhook Dispatcher"]
+        end
+    end
+
+    %% ── DATA LAYER ──
+    subgraph DataLayer ["Data & Vector Storage"]
+        POSTGRES[("PostgreSQL DB\n- Catalogs & Items\n- Bookings & Staff\n- Audit Logs")]
+        MILVUS[("Milvus Vector DB\n- Policy Embeddings\n- Catalog Embeddings")]
+        REDIS[("Redis Store\n- Session State\n- Slot Locks (TTL)")]
+    end
+
+    %% ── CONNECTIONS: Gateways to Orchestrator ──
+    API_ADMIN --> INGEST_Q
+    API_CHAT <--> STATE_MGR
+    STATE_MGR --> INTENT_ROUTER
+    INTENT_ROUTER --> AGENT_CORE
+    API_STAFF <--> TICKET_DISPATCH
+
+    %% ── CONNECTIONS: Orchestrator Internal Loops ──
+    AGENT_CORE <--> LLM_HUB
+    AGENT_CORE --> ListingEngine
+    AGENT_CORE --> BookingEngine
+    AGENT_CORE --> KnowledgeEngine
+
+    %% Ingestion Connections
+    INGEST_Q --> PARSER --> EMBED_ENG
+    EMBED_ENG -->|Upsert Vectors| MILVUS
+    PARSER -->|Insert Structured Records| POSTGRES
+
+    %% Tool to Storage Connections
+    T_CATALOG_SEARCH --> MILVUS
+    T_CATALOG_FILTER --> POSTGRES
+    T_ITEM_DETAILS --> POSTGRES
+    T_DOC_SEARCH --> MILVUS
+
+    T_CHECK_AVAIL --> POSTGRES
+    T_HOLD_SLOT --> REDIS
+    T_COMMIT_BOOK --> POSTGRES
+
+    %% Booking to Dispatch Flow
+    T_COMMIT_BOOK --> DISPATCH_RULE
+    DISPATCH_RULE --> TICKET_DISPATCH
+    TICKET_DISPATCH --> POSTGRES
+
+    %% Dispatch to Staff
+    TICKET_DISPATCH -->|Real-time SSE / WS| API_STAFF
+    API_STAFF -->|Claim / Confirm / Reject| TICKET_DISPATCH
+
+    %% Return Path to User
+    AGENT_CORE -->|Structured Payload & Action Chips| API_CHAT
+    STATE_MGR <--> REDIS

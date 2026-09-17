@@ -19,7 +19,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         start_time = time.time()
         client_host = request.client.host if request.client else "unknown"
         logger.info(
-            "HTTP Request: %s %s from %s",
+            "[HTTP_IN] %s %s (from %s)",
             request.method,
             request.url.path,
             client_host,
@@ -29,7 +29,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             response = await call_next(request)
             duration_ms = round((time.time() - start_time) * 1000, 2)
             logger.info(
-                "HTTP Response: %s %s -> status=%d [took %sms]",
+                "[HTTP_OUT] %s %s -> %d [took %sms]",
                 request.method,
                 request.url.path,
                 response.status_code,
@@ -39,7 +39,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         except Exception as exc:
             duration_ms = round((time.time() - start_time) * 1000, 2)
             logger.exception(
-                "HTTP Request Error: %s %s failed after %sms: %s",
+                "[HTTP_OUT] %s %s -> FAILED after %sms: %s",
                 request.method,
                 request.url.path,
                 duration_ms,
@@ -52,8 +52,25 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     setup_logging()
     logger.info("Starting %s [env=%s]", settings.PROJECT_NAME, settings.ENVIRONMENT)
+
+    # Initialize Milvus vector DB connection & collections
+    try:
+        from app.rag.client import connect_milvus, disconnect_milvus
+        from app.rag.milvus_collections import ensure_collections
+        connect_milvus()
+        ensure_collections()
+    except Exception as exc:
+        logger.warning("Milvus vector DB startup skipped: %s", exc)
+
     yield
+
+    try:
+        from app.rag.client import disconnect_milvus
+        disconnect_milvus()
+    except Exception:
+        pass
     logger.info("Shutting down %s", settings.PROJECT_NAME)
+
 
 
 from fastapi.responses import RedirectResponse

@@ -4,6 +4,12 @@ workspace:
 
 localResources:
   collections:
-    - ../OmniBook_API.postman_collection.json
+    - ../Booking Agent Service Booking API-1
   specs:
     - ../service-booking-platform/openapi.json
+
+# Each entry here maps a local resource to one or more corresponding objects in Postman Cloud
+
+cloudResources:
+  collections:
+    ../Booking Agent Service Booking API-1: Booking Agent-service-booking-api-v1

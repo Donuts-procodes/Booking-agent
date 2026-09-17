@@ -4,15 +4,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.booking import Booking, BookingStatus
+from app.models.service import Service
 from app.models.service_staff import ServiceStaff
 from app.models.staff import Staff
 
 
 # Selects the active staff member with the lowest load assigned to a service and increments load counter
-async def assign_staff_round_robin(db: AsyncSession, service_id: uuid.UUID) -> uuid.UUID | None:
+async def assign_staff_round_robin(db: AsyncSession, service_id: uuid.UUID, merchant_id: uuid.UUID | None = None) -> uuid.UUID | None:
     """Assigns a staff member to a booking using round-robin on least-loaded active staff.
 
-    Returns the assigned staff ID, or None if no staff are assigned to this service.
+    Checks service_staff join table first. If unassigned, falls back to any active staff of the merchant.
     """
     stmt = (
         select(Staff)
@@ -22,6 +23,31 @@ async def assign_staff_round_robin(db: AsyncSession, service_id: uuid.UUID) -> u
     )
     result = await db.execute(stmt)
     staff = result.scalars().first()
+
+    if not staff:
+        # Fallback to any active staff under this merchant or service's category merchant
+        if merchant_id:
+            m_stmt = (
+                select(Staff)
+                .where(Staff.merchant_id == merchant_id, Staff.is_active.is_(True))
+                .order_by(Staff.current_load.asc())
+            )
+            staff = (await db.execute(m_stmt)).scalars().first()
+        else:
+            from app.models.category import Category
+            cat_stmt = (
+                select(Staff)
+                .join(Category, Category.merchant_id == Staff.merchant_id)
+                .join(Service, Service.category_id == Category.id)
+                .where(Service.id == service_id, Staff.is_active.is_(True))
+                .order_by(Staff.current_load.asc())
+            )
+            staff = (await db.execute(cat_stmt)).scalars().first()
+
+    if not staff:
+        # Fallback to any active staff in system
+        all_stmt = select(Staff).where(Staff.is_active.is_(True)).order_by(Staff.current_load.asc())
+        staff = (await db.execute(all_stmt)).scalars().first()
 
     if not staff:
         return None

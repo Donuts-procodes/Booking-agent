@@ -1,16 +1,20 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useChatAgent } from "../hooks/useChatAgent";
-import { CategoryPills } from "../components/agent/CategoryPills";
+import { useMerchant } from "../context/MerchantContext";
 import { ServiceCard } from "../components/agent/ServiceCard";
 import { StatusModal } from "../components/agent/StatusModal";
 import { FeedbackModal } from "../components/agent/FeedbackModal";
 import { Bot, Send, Sparkles, Search, RefreshCw, AlertTriangle } from "lucide-react";
 
 export const ChatAgentPage: React.FC = () => {
+  const { profile } = useMerchant();
+
+
   const {
     messages,
     categories,
     services,
+    suggestionChips,
     activeServiceCard,
     catalogUnavailable,
     isAwaitingFeedback,
@@ -24,9 +28,9 @@ export const ChatAgentPage: React.FC = () => {
   } = useChatAgent();
 
   const [input, setInput] = useState("");
-  const [selectedCatId, setSelectedCatId] = useState<string | null>(null);
   const [isStatusModalOpen, setIsStatusModalOpen] = useState(false);
   const [isFeedbackModalOpen, setIsFeedbackModalOpen] = useState(false);
+
   const chatBottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -51,12 +55,15 @@ export const ChatAgentPage: React.FC = () => {
     sendMessage(msg);
   };
 
-  const handleCategoryClick = (catId: string) => {
-    setSelectedCatId(catId);
-    selectCategory(catId);
+  const handleChipClick = (chip: string) => {
+    sendMessage(chip);
   };
 
+  const agentTitle = profile?.name || "AI Service Assistant";
+  const agentSubtitle = "Powered by Semantic Search & Dynamic LLM";
+
   return (
+
     <div className="max-w-4xl mx-auto px-4 py-8 flex flex-col h-[calc(100vh-5rem)]">
       {/* Header bar */}
       <div className="flex items-center justify-between pb-4 border-b border-white/10 shrink-0">
@@ -66,11 +73,11 @@ export const ChatAgentPage: React.FC = () => {
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <h2 className="text-lg font-bold text-white tracking-tight">AI Service Assistant</h2>
+              <h2 className="text-lg font-bold text-white tracking-tight">{agentTitle}</h2>
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
               <span className="text-[11px] text-emerald-400 font-medium">Live</span>
             </div>
-            <p className="text-xs text-slate-400">Powered by Milvus Semantic Search & Dynamic LLM</p>
+            <p className="text-xs text-slate-400">{agentSubtitle}</p>
           </div>
         </div>
 
@@ -143,19 +150,25 @@ export const ChatAgentPage: React.FC = () => {
           );
         })}
 
-        {/* Dynamic Category Selector */}
-        {phase === "browse_categories" && categories.length > 0 && (
-          <div className="pl-11 animate-fade-in">
-            <CategoryPills
-              categories={categories}
-              selectedId={selectedCatId}
-              onSelect={handleCategoryClick}
-            />
+        {/* Suggestion Chips */}
+        {suggestionChips.length > 0 && (phase === "greeting" || phase === "browse_categories" || phase === "browse_services") && (
+          <div className="pl-11 flex flex-wrap gap-2 my-2 animate-fade-in">
+            {suggestionChips.map((chip) => (
+              <button
+                key={chip}
+                type="button"
+                onClick={() => handleChipClick(chip)}
+                className="px-3 py-1.5 rounded-xl bg-indigo-600/15 hover:bg-indigo-600/30 border border-indigo-500/25 text-indigo-300 hover:text-white text-xs font-medium transition-all cursor-pointer"
+              >
+                {chip}
+              </button>
+            ))}
           </div>
         )}
 
         {/* Dynamic Service Cards */}
         {phase === "browse_services" && services.length > 0 && (
+
           <div className="pl-11 grid grid-cols-1 sm:grid-cols-2 gap-3 my-3 animate-fade-in">
             {services.map((svc) => (
               <ServiceCard
